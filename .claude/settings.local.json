@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(SPRING_PROFILES_ACTIVE=local ./mvnw test -Dtest=AlertHandlerServiceTest,AnalyticsServiceTest,SlaBreachEventRepositoryJdbcTest,SlaBreachEventRepositoryTest)",
+      "Bash(SPRING_PROFILES_ACTIVE=local mvn test -Dtest=AlertHandlerServiceTest,AnalyticsServiceTest,SlaBreachEventRepositoryJdbcTest,SlaBreachEventRepositoryTest)",
+      "Bash(SPRING_PROFILES_ACTIVE=local mvn test)",
+      "Bash(SPRING_PROFILES_ACTIVE=local ./mvnw test -Dtest=RunIngestionControllerTest,AnalyticsServiceTest,AnalyticsControllerTest)",
+      "Bash(SPRING_PROFILES_ACTIVE=local ./mvnw test -Dtest=RunQueryServiceTest,RunQueryControllerTest)",
+      "Bash(SPRING_PROFILES_ACTIVE=local mvn test -Dtest=RunIngestionControllerTest,AnalyticsServiceTest,AnalyticsControllerTest)",
+      "Read(//d:/GitRepo/**)",
+      "Bash(SPRING_PROFILES_ACTIVE=local mvn test -Dtest=RunQueryServiceTest,RunQueryControllerTest)",
+      "Bash(SPRING_PROFILES_ACTIVE=local ./mvnw test -Dtest=AnalyticsServiceTest,AnalyticsControllerTest)",
+      "Bash(SPRING_PROFILES_ACTIVE=local mvn test -Dtest=AnalyticsServiceTest,AnalyticsControllerTest)",
+      "Bash(SPRING_PROFILES_ACTIVE=local mvn test-compile)",
+      "Bash(SPRING_PROFILES_ACTIVE=local ./mvnw test)",
+      "Bash(SPRING_PROFILES_ACTIVE=local mvn test -Dtest=RunIngestionServiceTest,RunIngestionControllerTest,RunStatusTest)",
+      "Bash(SPRING_PROFILES_ACTIVE=local mvn test -Dtest=AnalyticsServiceTest,AnalyticsControllerTest -pl .)",
+      "Bash(SPRING_PROFILES_ACTIVE=local mvn test -q)",
+      "Bash(SPRING_PROFILES_ACTIVE=local ./mvnw clean test)",
+      "Bash(SPRING_PROFILES_ACTIVE=local mvn clean test)",
+      "Bash(SPRING_PROFILES_ACTIVE=local ./mvnw test -Dtest=TimeUtilsTest)"
+    ]
+  }
+}

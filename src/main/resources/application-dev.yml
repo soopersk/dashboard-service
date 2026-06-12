@@ -1,0 +1,19 @@
+logging:
+  level:
+    root: DEBUG
+    org.springframework.web: DEBUG
+    org.hibernate.SQL: DEBUG
+
+observability:
+  calculator:
+    aliases:
+      capital: [capitalcalcdev]
+      portfolio: [portfoliocalcdev]
+      group-portfolio: [grportfoliocalcdev]
+      modelled-exposure: [modelledexposurecalcdev]
+      gemini-hedge: [geminihedgefundcalcdev]
+      consolidation: [consenrichmentcalcdev]
+      output-floor: [outputfloorcalcdev]
+      sectoral-floor: [floorscalcdev]
+      validation: [validationscalcdevonly]
+      market-risk: [marketriskrwacalcdev]

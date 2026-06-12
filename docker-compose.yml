@@ -1,0 +1,72 @@
+# File: docker-compose.yml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: observability-postgres
+    environment:
+      POSTGRES_DB: observability
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: observability-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: redis-server --notify-keyspace-events Ex
+
+  # Optional: Redis Commander for debugging
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: observability-redis-commander
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    profiles:
+      - debug
+
+  observability-service:
+    build: .
+    container_name: observability-service
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: observability
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      REDIS_HOST: redis
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+  redis_data:

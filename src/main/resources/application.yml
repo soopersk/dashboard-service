@@ -1,0 +1,180 @@
+# File: src/main/resources/application.yml
+spring:
+  application:
+    name: observability-service-main
+  
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:5432/${POSTGRES_DB:observability}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      pool-name: ObservabilityHikariCP
+      leak-detection-threshold: 60000
+
+  # NO JPA configuration needed!
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+    baseline-version: 0
+    schemas: public
+    validate-on-migrate: true
+#    clean-disabled: false
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 10
+          max-idle: 5
+          min-idle: 2
+
+  cache:
+    type: redis
+    redis:
+      time-to-live: 900000  # 15 minutes default
+      cache-null-values: false
+
+  task:
+    scheduling:
+      pool:
+        size: 5
+        thread-name-prefix: scheduled-
+    execution:
+      pool:
+        core-size: 5
+        max-size: 10
+        queue-capacity: 100
+        thread-name-prefix: async-
+
+# Actuator Management endpoints
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: ${spring.application.name}
+      environment: ${SPRING_PROFILES_ACTIVE:local}
+
+# Custom properties: Observability Configuration
+observability:
+  security:
+    basic:
+      username: ${OBS_BASIC_USER:admin}
+      password: ${OBS_BASIC_PASSWORD:admin}
+      role: ${OBS_BASIC_ROLE:USER}
+    admin:
+      username: ${OBS_ADMIN_USER:ops}
+      password: ${OBS_ADMIN_PASSWORD:ops}
+
+  sla:
+    # slaTime on the request is self-describing per run (T+N@HH:mm | HH:mm | ISO-8601 duration).
+    # No global mode switch — the spec kind decides interpretation.
+
+    live-tracking:
+      enabled: false
+
+    # Shared across all slaTime spec kinds: bands grade the actual duration against the
+    # frozen slaTime; lookback is the profile-computation window.
+    late-band-minutes: 15          # ON_TIME upper edge beyond the frozen slaTime
+    very-late-band-minutes: 30     # LATE upper edge beyond the frozen slaTime
+    min-sample-size: 5             # runs required before trusting the average
+    # Percentage buffer over a duration-derived baseline. Applied when slaTime is an ISO-8601
+    # duration or when the blank-slaTime fallback derives a baseline from
+    # expectedDurationMs / profile average.
+    duration-threshold-percent: 20
+    lookback:
+      daily-days: 30
+      monthly-days: 395
+
+    # OPTIMIZED: Live detection every 2 minutes (tolerance: few minutes)
+    live-detection:
+      enabled: false
+      interval-ms: 120000        # Every 2 minutes (good balance)
+      initial-delay-ms: 30000    # Start after 30 seconds
+      # DB fallback sweep: catches overdue RUNNING runs missing from Redis
+      # (registration failure / Redis outage at start). Redis stays the fast path.
+      db-sweep-interval-ms: 120000
+      db-sweep-initial-delay-ms: 60000
+
+    # Early warning for approaching SLA
+    early-warning:
+      enabled: false
+      interval-ms: 180000        # Every 3 minutes
+      threshold-minutes: 10      # Warn if SLA within 10 minutes
+
+  # End-of-day aggregation + calculator-profile cache. calculator_sli_daily is populated
+  # nightly (not per completion); slowly-changing profiles (avg runtime, avg start/end)
+  # are cached in Redis and reused for SLA baselines and estimated start/end.
+  aggregation:
+    daily:
+      enabled: true
+      cron: "0 30 0 * * *"        # 00:30 every day
+    recompute-window-days: 3       # trailing reporting dates recomputed (late completions)
+    profile-cache-ttl-hours: 26
+    empty-profile-cache-ttl-minutes: 60
+
+  alerts:
+    channel: logging
+
+  calculator:
+    # Aliases are env-specific → defined in application-dev/uat/prod.yml.
+    # Regions / run-types are env-invariant → defined once here (Spring merges map keys across profiles).
+    regions:
+      capital: [WMAP, WMDE, ASIA, WMUS, AUNZ, WMCH, ZURI, LDNL, AMER, EURO]
+    run-types:
+      modelled-exposure: [ETD, OTC, SFT]
+      gemini-hedge: [ETD, OTC, SFT]
+
+  cache:
+    eviction:
+      enabled: true
+
+  partitions:
+    management:
+      enabled: true
+
+# Logging
+logging:
+  level:
+    root: INFO
+    com.company.observability: DEBUG
+    org.flywaydb: DEBUG
+    org.springframework.jdbc: DEBUG
+    org.springframework.cache: TRACE
+    org.springframework.cache.interceptor: TRACE
+    org.springframework.data.redis.cache: TRACE
+    io.lettuce.core: DEBUG
+
+# Springdoc OpenAPI
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha

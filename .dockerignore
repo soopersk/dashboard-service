@@ -1,0 +1,9 @@
+# File: .dockerignore
+target/
+.git/
+.idea/
+*.md
+.DS_Store
+src/test/
+kubernetes/
+docker-compose.yml

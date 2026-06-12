@@ -1,0 +1,23 @@
+# File: src/main/resources/application-prod.yml
+spring:
+  jpa:
+    show-sql: false
+
+logging:
+  level:
+    root: INFO
+    com.company.observability: INFO
+
+observability:
+  calculator:
+    aliases:
+      capital: [capitalcalc, capitalcalcmedium, capitalcalcsmall, capitalcalcextrasmall]
+      portfolio: [portfoliocalc]
+      group-portfolio: [grportfoliocalc]
+      modelled-exposure: [modelledexposurecalc]
+      gemini-hedge: [geminihedgefundcalc]
+      consolidation: [consenrichmentcalc]
+      output-floor: [outputfloorcalc]
+      sectoral-floor: [floorscalc]
+      validation: [validationscalculator]
+      market-risk: [marketriskrwacalc]
