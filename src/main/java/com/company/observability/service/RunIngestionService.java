@@ -354,8 +354,12 @@ public class RunIngestionService {
     }
 
     /**
-     * Estimated end precedence: request value (Airflow) → duration baseline fallback →
-     * frozen clock-derived deadline when no duration baseline is available → profile avg → null.
+     * Estimated end precedence: request value (Airflow) → duration baseline → profile avg → null.
+     *
+     * <p>When no duration baseline exists we deliberately persist {@code null} rather than the frozen
+     * clock-derived SLA deadline: conflating the deadline into {@code estimated_end_time} (an immutable
+     * column) made runs look "planned" to consume their whole SLA budget. Null is honest — consumers
+     * fall back to the {@code sla} field for the deadline.
      */
     private Instant resolveEstimatedEnd(
             StartRunRequest request,
@@ -374,11 +378,6 @@ public class RunIngestionService {
                 return estimatedStart.plusMillis(slaResolution.baselineDurationMs());
             }
             return TimeUtils.calculateEstimatedEndTime(request.getStartTime(), slaResolution.baselineDurationMs());
-        }
-
-        // No duration baseline, but we have a frozen (clock-derived) deadline — use it as estimated end.
-        if (slaResolution != null && slaResolution.deadline() != null) {
-            return slaResolution.deadline();
         }
 
         if (profile != null && profile.avgDurationMs() > 0 && estimatedStart != null) {

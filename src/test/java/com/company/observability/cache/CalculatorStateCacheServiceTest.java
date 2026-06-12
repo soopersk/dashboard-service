@@ -162,6 +162,32 @@ class CalculatorStateCacheServiceTest {
         service.putEntries(DATE, FREQ, null, Map.of("cap", entry));
     }
 
+    // ── Eviction ──────────────────────────────────────────────────────────────
+
+    @Test
+    void evictEntry_withRunNumber_deletesBothKeys() {
+        service.evictEntry("cap", DATE, FREQ, "1");
+
+        verify(redisTemplate).delete(List.of(
+                "obs:state:cap:" + DATE + ":DAILY:all",
+                "obs:state:cap:" + DATE + ":DAILY:1"));
+    }
+
+    @Test
+    void evictEntry_nullRunNumber_deletesOnlyAllKey() {
+        service.evictEntry("cap", DATE, FREQ, null);
+
+        verify(redisTemplate).delete(List.of("obs:state:cap:" + DATE + ":DAILY:all"));
+    }
+
+    @Test
+    void evictEntry_redisFailure_swallowed() {
+        doThrow(new RuntimeException("Redis down")).when(redisTemplate).delete(anyList());
+
+        // Should not throw — best-effort
+        service.evictEntry("cap", DATE, FREQ, "1");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private RunEntry runEntry(String status, String slaStatus) {

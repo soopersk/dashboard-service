@@ -100,14 +100,31 @@ public class RunQueryController {
             // Pad each configured alias to its full declared set of expected runs
             calculators = expectedRunsService.padToExpected(calculators, reportingDate, freq, runNumber);
 
+            int maxAgeSeconds = isLive(calculators) ? 5 : 30;
             return ResponseEntity.ok()
-                    .cacheControl(CacheControl.maxAge(30, TimeUnit.SECONDS).cachePrivate())
+                    .cacheControl(CacheControl.maxAge(maxAgeSeconds, TimeUnit.SECONDS).cachePrivate())
                     .body(new CalculatorBatchRunsResponse(
                             reportingDate, freq.name(), runNumber, Instant.now(), calculators));
         } finally {
             sample.stop(meterRegistry.timer(ObservabilityConstants.API_ANALYTICS_DURATION,
                     "endpoint", "/calculators/batch/runs"));
         }
+    }
+
+    /**
+     * A response is "live" when something may change imminently: any RUNNING or NOT_STARTED entry,
+     * or any calculator with an empty runs list (a run may start any second). Live responses get a
+     * short HTTP max-age so the client re-polls quickly; all-terminal responses keep the longer 30 s.
+     */
+    private boolean isLive(Map<String, CalculatorBatchRunsResponse.CalculatorEntry> calculators) {
+        return calculators.values().stream().anyMatch(entry -> {
+            List<CalculatorBatchRunsResponse.RunEntry> runs = entry.runs();
+            if (runs == null || runs.isEmpty()) {
+                return true;
+            }
+            return runs.stream().anyMatch(r ->
+                    "RUNNING".equals(r.status()) || "NOT_STARTED".equals(r.status()));
+        });
     }
 
     private CalculatorBatchRunsResponse.CalculatorEntry mergeEntries(

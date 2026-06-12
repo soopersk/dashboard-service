@@ -132,16 +132,70 @@ class CalculatorProfileServiceTest {
     }
 
     @Test
-    void scopedOverload_insufficientSamples_fallsBackToBlended() {
-        CalculatorProfile thinScoped = new CalculatorProfile("calc-1", "DAILY", "1", null, 0, 0, 0, 0);
+    void scopedOverload_tier1Sufficient_returnsExact() {
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
         when(valueOps.get(SCOPED_KEY)).thenReturn(null);
-        when(dailyAggregateRepository.findProfileByRunNumber("calc-1", "DAILY", 30, "1")).thenReturn(thinScoped);
-        when(valueOps.get(BLENDED_KEY)).thenReturn(json(blended));
+        when(dailyAggregateRepository.findProfileByRunNumber("calc-1", "DAILY", 30, "1")).thenReturn(scoped);
 
         CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY, "1");
 
-        assertThat(result.avgDurationMs()).isEqualTo(600_000L);
+        assertThat(result.avgDurationMs()).isEqualTo(500_000L);
+        assertThat(result.confidence()).isEqualTo(CalculatorProfile.ProfileConfidence.EXACT);
+        verify(valueOps).set(eq(SCOPED_KEY),
+                eq(json(scoped.withConfidence(CalculatorProfile.ProfileConfidence.EXACT))),
+                eq(Duration.ofHours(26)));
+        // Never blends down to the 2-arg profile.
+        verify(valueOps, never()).get(BLENDED_KEY);
+    }
+
+    @Test
+    void scopedOverload_sparseExact_isKept_notDilutedByTier2() {
+        CalculatorProfile sparse = new CalculatorProfile("calc-1", "DAILY", "1", null, 450_000L, 280, 340, 2);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.get(SCOPED_KEY)).thenReturn(null);
+        when(dailyAggregateRepository.findProfileByRunNumber("calc-1", "DAILY", 30, "1")).thenReturn(sparse);
+
+        CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY, "1");
+
+        assertThat(result.avgDurationMs()).isEqualTo(450_000L);
+        assertThat(result.confidence()).isEqualTo(CalculatorProfile.ProfileConfidence.SPARSE_EXACT);
+        // Sparse-but-exact data short-circuits — Tier 2 is not consulted.
+        verify(dailyAggregateRepository, never()).findRecentExactByRunNumber(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void scopedOverload_tier1Empty_fallsToTier2RecentExact() {
+        CalculatorProfile empty = new CalculatorProfile("calc-1", "DAILY", "1", null, 0, 0, 0, 0);
+        CalculatorProfile recent = new CalculatorProfile("calc-1", "DAILY", "1", null, 510_000L, 295, 355, 3);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.get(SCOPED_KEY)).thenReturn(null);
+        when(dailyAggregateRepository.findProfileByRunNumber("calc-1", "DAILY", 30, "1")).thenReturn(empty);
+        when(dailyAggregateRepository.findRecentExactByRunNumber("calc-1", "DAILY", "1")).thenReturn(recent);
+
+        CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY, "1");
+
+        assertThat(result.avgDurationMs()).isEqualTo(510_000L);
+        assertThat(result.confidence()).isEqualTo(CalculatorProfile.ProfileConfidence.RECENT_EXACT);
+        verify(valueOps).set(eq(SCOPED_KEY),
+                eq(json(recent.withConfidence(CalculatorProfile.ProfileConfidence.RECENT_EXACT))),
+                eq(Duration.ofHours(4)));
+    }
+
+    @Test
+    void scopedOverload_bothTiersMiss_returnsSentinel_notNull() {
+        CalculatorProfile empty = new CalculatorProfile("calc-1", "DAILY", "1", null, 0, 0, 0, 0);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.get(SCOPED_KEY)).thenReturn(null);
+        when(dailyAggregateRepository.findProfileByRunNumber("calc-1", "DAILY", 30, "1")).thenReturn(empty);
+        when(dailyAggregateRepository.findRecentExactByRunNumber("calc-1", "DAILY", "1")).thenReturn(empty);
+
+        CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY, "1");
+
+        assertThat(result).isNotNull();
+        assertThat(result.totalRuns()).isZero();
+        assertThat(result.hasSufficientSamples(5)).isFalse();
+        assertThat(result.confidence()).isNull();
+        verify(valueOps).set(eq(SCOPED_KEY), anyString(), eq(Duration.ofMinutes(60)));
     }
 
     // ── Dimension-scoped (4-arg) overload ─────────────────────────────────
@@ -167,22 +221,50 @@ class CalculatorProfileServiceTest {
         CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY, "1", "WMAP");
 
         assertThat(result.avgDurationMs()).isEqualTo(480_000L);
-        verify(valueOps).set(eq(DIM_KEY), eq(json(dimProfile)), any(Duration.class));
+        assertThat(result.confidence()).isEqualTo(CalculatorProfile.ProfileConfidence.EXACT);
+        verify(valueOps).set(eq(DIM_KEY),
+                eq(json(dimProfile.withConfidence(CalculatorProfile.ProfileConfidence.EXACT))),
+                eq(Duration.ofHours(26)));
     }
 
     @Test
-    void dimScopedOverload_insufficientSamples_fallsBackToScoped() {
-        CalculatorProfile thinDim = new CalculatorProfile("calc-1", "DAILY", "1", "WMAP", 0, 0, 0, 0);
+    void dimScopedOverload_tier1Empty_fallsToTier2RecentExact_notScoped() {
+        CalculatorProfile emptyDim = new CalculatorProfile("calc-1", "DAILY", "1", "WMAP", 0, 0, 0, 0);
+        CalculatorProfile recentDim = new CalculatorProfile("calc-1", "DAILY", "1", "WMAP", 490_000L, 286, 346, 2);
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
         when(valueOps.get(DIM_KEY)).thenReturn(null);
         when(dailyAggregateRepository.findProfileByRunNumberAndDimension("calc-1", "DAILY", 30, "1", "WMAP"))
-                .thenReturn(thinDim);
-        // Falls back to scoped key
-        when(valueOps.get(SCOPED_KEY)).thenReturn(json(scoped));
+                .thenReturn(emptyDim);
+        when(dailyAggregateRepository.findRecentExactByDimension("calc-1", "DAILY", "1", "WMAP"))
+                .thenReturn(recentDim);
 
         CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY, "1", "WMAP");
 
-        assertThat(result.avgDurationMs()).isEqualTo(500_000L);
+        assertThat(result.avgDurationMs()).isEqualTo(490_000L);
+        assertThat(result.confidence()).isEqualTo(CalculatorProfile.ProfileConfidence.RECENT_EXACT);
+        // Never collapses to the dimension-agnostic scoped profile.
+        verify(valueOps, never()).get(SCOPED_KEY);
+        verify(valueOps).set(eq(DIM_KEY),
+                eq(json(recentDim.withConfidence(CalculatorProfile.ProfileConfidence.RECENT_EXACT))),
+                eq(Duration.ofHours(4)));
+    }
+
+    @Test
+    void dimScopedOverload_archetypeB_nullRunNumber_usesTier2NullRunNumber() {
+        // Archetype B: null run_number, dimension present. Aggregate empty for the slice → Tier 2.
+        CalculatorProfile emptyDim = new CalculatorProfile("calc-1", "DAILY", null, "WMAP", 0, 0, 0, 0);
+        CalculatorProfile recentDim = new CalculatorProfile("calc-1", "DAILY", null, "WMAP", 470_000L, 280, 340, 4);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.get(DIM_NULL_RN_KEY)).thenReturn(null);
+        when(dailyAggregateRepository.findProfileByRunNumberAndDimension("calc-1", "DAILY", 30, null, "WMAP"))
+                .thenReturn(emptyDim);
+        when(dailyAggregateRepository.findRecentExactByDimension("calc-1", "DAILY", null, "WMAP"))
+                .thenReturn(recentDim);
+
+        CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY, null, "WMAP");
+
+        assertThat(result.avgDurationMs()).isEqualTo(470_000L);
+        assertThat(result.confidence()).isEqualTo(CalculatorProfile.ProfileConfidence.RECENT_EXACT);
     }
 
     @Test

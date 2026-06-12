@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,10 +32,13 @@ import static com.company.observability.util.ObservabilityConstants.*;
  *   <li>all SUCCESS &amp; clean and an old reporting date (&gt;3 days) → 4 h</li>
  * </ul>
  *
- * <p>Invalidation is TTL-only — no event listeners. A SUCCESS snapshot can be <em>partial</em>
- * (e.g. a multi-region calculator where one region finished before the next started, or a
- * re-trigger after SUCCESS). The 4 h bucket is therefore allowlist-only and gated on the reporting
- * date being old enough that no new runs are plausible; the current cycle stays at 5 min.
+ * <p>Invalidation is event-driven with TTL as the backstop: {@link CalculatorStateCacheInvalidationListener}
+ * calls {@link #evictEntry} on every {@code RunStartedEvent}/{@code RunCompletedEvent}/{@code SlaBreachedEvent}
+ * so status transitions (NOT_STARTED→RUNNING→terminal) are reflected on the next query instead of waiting
+ * for the TTL to lapse. The TTLs below remain as a safety net for any state change that does not fire an
+ * event. A SUCCESS snapshot can still be <em>partial</em> (e.g. a multi-region calculator where one region
+ * finished before the next started, or a re-trigger after SUCCESS). The 4 h bucket is therefore allowlist-only
+ * and gated on the reporting date being old enough that no new runs are plausible; the current cycle stays at 5 min.
  *
  * <p>All Redis ops are best-effort: exceptions are swallowed and the caller falls back to DB.
  */
@@ -106,6 +110,30 @@ public class CalculatorStateCacheService {
                 log.warn("event=state.cache.write outcome=failure key={} error={}", key, e.getMessage());
             }
         });
+    }
+
+    // ── Eviction ──────────────────────────────────────────────────────────────
+
+    /**
+     * Deletes the deterministic state-cache keys for a single run: always the {@code :all} variant,
+     * plus the {@code :{runNumber}} variant when a run number is present. The run carries every key
+     * component, so no SCAN is needed. Best-effort — Redis exceptions are swallowed and the next
+     * query simply repopulates from the DB.
+     */
+    public void evictEntry(String calculatorName, LocalDate reportingDate,
+                           String frequency, String runNumber) {
+        List<String> keys = new ArrayList<>(2);
+        keys.add(buildKey(calculatorName, reportingDate, frequency, null));
+        if (runNumber != null) {
+            keys.add(buildKey(calculatorName, reportingDate, frequency, runNumber));
+        }
+        try {
+            redisTemplate.delete(keys);
+            meterRegistry.counter(CACHE_STATE_EVICTION, "calculator", calculatorName).increment();
+            log.debug("event=state.cache.evict outcome=success keys={}", keys);
+        } catch (Exception e) {
+            log.warn("event=state.cache.evict outcome=failure keys={} error={}", keys, e.getMessage());
+        }
     }
 
     // ── TTL selection ─────────────────────────────────────────────────────────

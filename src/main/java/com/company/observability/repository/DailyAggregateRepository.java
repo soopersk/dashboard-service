@@ -411,6 +411,88 @@ public class DailyAggregateRepository {
         }
     }
 
+    /**
+     * Tier-2 fallback for the run_number-scoped (3-arg) profile: aggregates the last 5 completed
+     * {@code SUCCESS} runs for the calculator+frequency+run_number straight from
+     * {@code calculator_runs}, ignoring dimension. Used only when {@code calculator_sli_daily} has
+     * no row for the exact slice (e.g. a freshly-onboarded calculator before the first nightly
+     * recompute). Returns a zero-sample sentinel when no recent run exists.
+     *
+     * <p>{@code runNumber} may be null (Archetype B) — the explicit
+     * {@code (:runNumber IS NULL AND run_number IS NULL)} form avoids the JDBC untyped-null pitfall.
+     */
+    public CalculatorProfile findRecentExactByRunNumber(String calculatorName, String frequency,
+                                                        String runNumber) {
+        return findRecentExact(calculatorName, frequency, runNumber, null);
+    }
+
+    /**
+     * Tier-2 fallback for the dimension-scoped (4-arg) profile: same as
+     * {@link #findRecentExactByRunNumber} but additionally filters on the dimension value
+     * ({@code COALESCE(region, run_type, 'ALL')}).
+     */
+    public CalculatorProfile findRecentExactByDimension(String calculatorName, String frequency,
+                                                        String runNumber, String dimensionValue) {
+        return findRecentExact(calculatorName, frequency, runNumber, dimensionValue);
+    }
+
+    private CalculatorProfile findRecentExact(String calculatorName, String frequency,
+                                              String runNumber, String dimensionValue) {
+        String dimFilter = dimensionValue != null
+                ? "AND COALESCE(region, run_type, 'ALL') = :dimensionValue\n"
+                : "";
+        String sql = """
+            SELECT COALESCE(AVG(duration_ms), 0)                                AS avg_duration_ms,
+                   COALESCE(AVG(EXTRACT(HOUR   FROM start_time AT TIME ZONE 'UTC') * 60 +
+                               EXTRACT(MINUTE FROM start_time AT TIME ZONE 'UTC')), 0) AS avg_start_min_utc,
+                   COALESCE(AVG(EXTRACT(HOUR   FROM end_time   AT TIME ZONE 'UTC') * 60 +
+                               EXTRACT(MINUTE FROM end_time   AT TIME ZONE 'UTC')), 0) AS avg_end_min_utc,
+                   COUNT(*)                                                      AS total_runs
+            FROM (
+                SELECT duration_ms, start_time, end_time
+                FROM calculator_runs
+                WHERE calculator_name = :calculatorName
+                  AND frequency        = :frequency
+                  %s  AND ((:runNumber IS NULL AND run_number IS NULL)
+                       OR run_number = :runNumber)
+                  AND status = 'SUCCESS'
+                  AND end_time IS NOT NULL
+                  AND reporting_date >= CURRENT_DATE - INTERVAL '90 days'
+                ORDER BY created_at DESC
+                LIMIT 5
+            ) recent
+            """.formatted(dimFilter);
+
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("calculatorName", calculatorName)
+                .addValue("frequency", frequency)
+                .addValue("runNumber", runNumber, Types.VARCHAR);
+        if (dimensionValue != null) {
+            params.addValue("dimensionValue", dimensionValue);
+        }
+
+        try {
+            Timer.Sample sample = Timer.start(meterRegistry);
+            CalculatorProfile profile = jdbcTemplate.queryForObject(sql, params, (rs, rowNum) -> {
+                int total = rs.getInt("total_runs");
+                if (total <= 0) {
+                    return CalculatorProfile.fromSums(calculatorName, frequency, runNumber, dimensionValue, 0, 0, 0, 0);
+                }
+                return new CalculatorProfile(calculatorName, frequency, runNumber, dimensionValue,
+                        Math.round(rs.getDouble("avg_duration_ms")),
+                        (int) Math.round(rs.getDouble("avg_start_min_utc")),
+                        (int) Math.round(rs.getDouble("avg_end_min_utc")),
+                        total);
+            });
+            sample.stop(Timer.builder(DB_QUERY_DURATION).tag("query", "find_recent_exact").register(meterRegistry));
+            return profile;
+        } catch (Exception e) {
+            log.error("event=daily_aggregate.find_recent_exact outcome=failure calculator_name={} frequency={} runNumber={} dim={}",
+                    calculatorName, frequency, runNumber, dimensionValue, e);
+            return CalculatorProfile.fromSums(calculatorName, frequency, runNumber, dimensionValue, 0, 0, 0, 0);
+        }
+    }
+
     private static class DailyAggregateRowMapper implements RowMapper<DailyAggregate> {
         @Override
         public DailyAggregate mapRow(ResultSet rs, int rowNum) {

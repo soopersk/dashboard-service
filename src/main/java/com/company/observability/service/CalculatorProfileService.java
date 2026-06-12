@@ -60,8 +60,15 @@ public class CalculatorProfileService {
      * the given {@code runNumber} — gives accurate start/end estimates when a calculator runs
      * in multiple cycles (T+1 vs T+2) with different timing.
      *
-     * <p>Falls back to {@link #getProfile(String, Frequency)} for brand-new calculators
-     * with no run_number-scoped history.
+     * <p>Two tiers, no blending: the exact run_number slice from {@code calculator_sli_daily}
+     * (Tier 1), then — only when that slice has <b>zero</b> history — the last few raw runs from
+     * {@code calculator_runs} (Tier 2, RECENT_EXACT). Sparse exact data is always kept rather than
+     * diluted by a cross-run_number average. When both tiers miss, a zero-sample sentinel is
+     * returned (never null) so callers' {@code hasSufficientSamples()} guard handles it uniformly.
+     *
+     * <p>A null {@code runNumber} (Archetype B — no run_number dimension) routes to the blended
+     * {@link #getProfile(String, Frequency)}: with no run_number to scope by, the blended profile
+     * <i>is</i> the exact slice.
      */
     public CalculatorProfile getProfile(String calculatorName, Frequency frequency, String runNumber) {
         if (runNumber == null) {
@@ -76,23 +83,36 @@ public class CalculatorProfileService {
         }
         meterRegistry.counter("obs.profile.cache", "result", "miss", "scoped", "true").increment();
 
+        // Tier 1: exact run_number slice from the nightly aggregate.
         CalculatorProfile profile = dailyAggregateRepository.findProfileByRunNumber(
                 calculatorName, frequency.name(), slaProperties.lookbackDays(frequency), runNumber);
-
-        if (profile.hasSufficientSamples(slaProperties.getMinSampleSize())) {
-            writeToCache(key, profile);
-            return profile;
+        if (profile.totalRuns() > 0) {
+            return cacheAndReturn(key, tagAggregateConfidence(profile));
         }
-        // Fall back to blended profile for brand-new calcs
-        return getProfile(calculatorName, frequency);
+
+        // Tier 2: last raw runs for the exact run_number slice.
+        CalculatorProfile recent = dailyAggregateRepository.findRecentExactByRunNumber(
+                calculatorName, frequency.name(), runNumber);
+        if (recent.totalRuns() > 0) {
+            return cacheAndReturn(key, recent.withConfidence(CalculatorProfile.ProfileConfidence.RECENT_EXACT));
+        }
+
+        // Both tiers missed — zero-sample sentinel (cached briefly).
+        return cacheAndReturn(key, CalculatorProfile.fromSums(
+                calculatorName, frequency.name(), runNumber, null, 0, 0, 0, 0));
     }
 
     /**
      * Dimension-scoped cache-aside read. Returns a profile aggregated only from rows matching
      * the given {@code dimensionValue} (e.g. "WMAP") and {@code runNumber}.
      *
-     * <p>Falls back to {@link #getProfile(String, Frequency, String)} (scoped → blended chain)
-     * for calculators with no dimension-specific history yet.
+     * <p>Same two-tier, no-blend contract as {@link #getProfile(String, Frequency, String)}:
+     * exact dimension slice from the aggregate (Tier 1), then the last raw runs for that exact
+     * slice (Tier 2, RECENT_EXACT), then a zero-sample sentinel. Never falls back to a coarser
+     * (dimension-collapsed) profile.
+     *
+     * <p>A null {@code dimensionValue} (Archetype C — single constant dimension) routes to the
+     * run_number-scoped {@link #getProfile(String, Frequency, String)} — same underlying data.
      */
     public CalculatorProfile getProfile(String calculatorName, Frequency frequency,
                                         String runNumber, String dimensionValue) {
@@ -108,16 +128,36 @@ public class CalculatorProfileService {
         }
         meterRegistry.counter("obs.profile.cache", "result", "miss", "dim", "true").increment();
 
+        // Tier 1: exact dimension slice from the nightly aggregate.
         CalculatorProfile profile = dailyAggregateRepository.findProfileByRunNumberAndDimension(
                 calculatorName, frequency.name(), slaProperties.lookbackDays(frequency),
                 runNumber, dimensionValue);
-
-        if (profile.hasSufficientSamples(slaProperties.getMinSampleSize())) {
-            writeToCache(key, profile);
-            return profile;
+        if (profile.totalRuns() > 0) {
+            return cacheAndReturn(key, tagAggregateConfidence(profile));
         }
-        // Fall back to scoped/blended chain for brand-new calcs or new dimension values
-        return getProfile(calculatorName, frequency, runNumber);
+
+        // Tier 2: last raw runs for the exact dimension slice.
+        CalculatorProfile recent = dailyAggregateRepository.findRecentExactByDimension(
+                calculatorName, frequency.name(), runNumber, dimensionValue);
+        if (recent.totalRuns() > 0) {
+            return cacheAndReturn(key, recent.withConfidence(CalculatorProfile.ProfileConfidence.RECENT_EXACT));
+        }
+
+        // Both tiers missed — zero-sample sentinel (cached briefly).
+        return cacheAndReturn(key, CalculatorProfile.fromSums(
+                calculatorName, frequency.name(), runNumber, dimensionValue, 0, 0, 0, 0));
+    }
+
+    /** EXACT when the exact slice has enough samples, SPARSE_EXACT when it has 1..(min-1). */
+    private CalculatorProfile tagAggregateConfidence(CalculatorProfile profile) {
+        return profile.withConfidence(profile.hasSufficientSamples(slaProperties.getMinSampleSize())
+                ? CalculatorProfile.ProfileConfidence.EXACT
+                : CalculatorProfile.ProfileConfidence.SPARSE_EXACT);
+    }
+
+    private CalculatorProfile cacheAndReturn(String key, CalculatorProfile profile) {
+        writeToCache(key, profile);
+        return profile;
     }
 
     /**
@@ -142,15 +182,27 @@ public class CalculatorProfileService {
     }
 
     private void writeToCache(String key, CalculatorProfile profile) {
-        // Short TTL for "no history yet" so newly-active calculators are picked up sooner.
-        Duration ttl = profile.totalRuns() > 0
-                ? Duration.ofHours(aggregationProperties.getProfileCacheTtlHours())
-                : Duration.ofMinutes(aggregationProperties.getEmptyProfileCacheTtlMinutes());
+        Duration ttl = ttlFor(profile);
         try {
             redisTemplate.opsForValue().set(key, objectMapper.writeValueAsString(profile), ttl);
         } catch (Exception e) {
             log.warn("event=profile.cache.write outcome=failure key={} error={}", key, e.getMessage());
         }
+    }
+
+    /**
+     * Cache TTL by profile kind: "no history yet" sentinels get a short TTL so newly-active
+     * calculators are picked up sooner; lazily-built RECENT_EXACT profiles get a medium TTL so the
+     * next nightly recompute supersedes them quickly; aggregate-backed profiles get the daily TTL.
+     */
+    private Duration ttlFor(CalculatorProfile profile) {
+        if (profile.totalRuns() <= 0) {
+            return Duration.ofMinutes(aggregationProperties.getEmptyProfileCacheTtlMinutes());
+        }
+        if (profile.confidence() == CalculatorProfile.ProfileConfidence.RECENT_EXACT) {
+            return Duration.ofHours(aggregationProperties.getRecentProfileCacheTtlHours());
+        }
+        return Duration.ofHours(aggregationProperties.getProfileCacheTtlHours());
     }
 
     private String key(String calculatorName, Frequency frequency, String runNumber, String dimensionValue) {

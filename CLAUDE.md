@@ -114,8 +114,8 @@ Four controllers. All except `HealthController` require HTTP Basic auth and `X-T
 | Controller | Path | Purpose |
 |---|---|---|
 | `HealthController` | `GET /api/v1/health` | Health check (unauthenticated) |
-| `RunIngestionController` | `POST /api/v1/runs/start`, `POST /api/v1/runs/{runId}/complete` | Airflow calls this to record run lifecycle |
-| `RunQueryController` | `GET /api/v1/calculators/batch/runs` | Dashboard feed — dimensional run state per calculator for a reporting date. `keys` param is pipe-separated `calculator_name` values. Response keyed by `calculatorName`. Regional calculators return one `RunEntry` per `region`; typed calculators per `runType`. `isRerun=true` signals a re-trigger. |
+| `RunIngestionController` | `POST /api/v1/runs/start`, `POST /api/v1/runs/{runId}/complete` | Airflow calls this to record run lifecycle. `/start`: **201 Created** when a new run is persisted, **200 OK** on idempotent replay of an existing run. `/complete`: **200 OK** on success or idempotent replay; **409 Conflict** when trying to change an already-recorded terminal outcome. Strict `frequency` binding — an unknown value is a **400**, not a silent fallback. MONTHLY runs with a non-end-of-month `reporting_date` are **rejected (400)**. |
+| `RunQueryController` | `GET /api/v1/calculators/batch/runs` | Dashboard feed — dimensional run state per calculator for a reporting date. `keys` param is pipe-separated `calculator_name` values. Response keyed by `calculatorName`. Regional calculators return one `RunEntry` per `region`; typed calculators per `runType`. `isRerun=true` signals a re-trigger. `Cache-Control` is state-aware: `max-age=5` while any entry is RUNNING/NOT_STARTED (or has no runs yet), `max-age=30` once all entries are terminal; always `private`. |
 | `AnalyticsController` | `GET /api/v1/analytics/calculators/{calculatorName}/executions` | Raw execution history — each physical run appears independently (no split-grouping). Includes `runNumber` and `expectedDurationMs` per entry for actual-vs-expected comparison. Path uses `calculatorName` (not UUID). |
 
 `/api/v1/health`, Swagger, and `/v3/api-docs` are unauthenticated. Security is HTTP Basic with an in-memory single user configured via `observability.security.basic.*` properties (default: `admin`/`admin`).
@@ -150,7 +150,7 @@ Frequency-specific query windows:
 | `obs:profile:{calcName}:{frequency}` | String | Cached `CalculatorProfile` (blended, no runNumber/dim). TTL 26h (with samples) / 60m (empty sentinel). |
 | `obs:profile:{calcName}:{frequency}:{runNumber}` | String | Run_number-scoped profile. Same TTL rules. |
 | `obs:profile:{calcName}:{frequency}:{runNumber\|*}:{dim}` | String | Dimension-scoped profile (e.g. region "WMAP"). `*` when runNumber is null. Warmed nightly as third tier. All three tiers served by `CalculatorProfileService`. |
-| `obs:state:{calculatorName}:{reportingDate}:{frequency}:{runNumber\|all}` | String | Cached `CalculatorEntry` for `/batch/runs`. State-aware TTL: 30s (RUNNING) / 60s (NOT_STARTED or empty) / 5m (terminal with failure/breach) / 4h (terminal clean). `CalculatorStateCacheService`. Invalidation: TTL-only. |
+| `obs:state:{calculatorName}:{reportingDate}:{frequency}:{runNumber\|all}` | String | Cached `CalculatorEntry` for `/batch/runs`. State-aware TTL: 30s (RUNNING) / 60s (NOT_STARTED or empty) / 5m (terminal with failure/breach) / 4h (terminal clean). `CalculatorStateCacheService`. Invalidation: **event-driven** — `CalculatorStateCacheInvalidationListener` evicts the run's `:all` + `:{runNumber}` keys on every `RunStartedEvent`/`RunCompletedEvent`/`SlaBreachedEvent` (AFTER_COMMIT, async), so status transitions show on the next query; the TTLs above are the backstop for state changes that fire no event. |
 
 ### SLA Detection (self-describing spec)
 
@@ -159,7 +159,7 @@ At start, `SlaBaselineResolver` derives one absolute deadline and freezes it int
 | `slaTime` form | DAILY | MONTHLY |
 |---|---|---|
 | `"T+N@HH:mm"` (N≥1) | deadline = `nextBusinessDay(reportingDate, N)` at `HH:mm` in `slaTimezone` (default UTC). No band added (bands are grading-only) | **rejected** (`DomainValidationException`) — MONTHLY clock SLA must be bare `HH:mm` |
-| `"HH:mm"` (bare clock) | offset falls back to `parseRunNumber(runNumber)` (run 1→T+1, run 2→T+2, null/invalid→T+2) | `TimeUtils.clockTimeDeadlineUtc(startTime, HH:mm)` — startTime's UTC date at the cutoff, rolled +1 day if at/before startTime |
+| `"HH:mm"` (bare clock) | offset falls back to `parseRunNumber(runNumber)` (run 1→T+1, run 2→T+2, null/invalid→T+2) | `TimeUtils.clockTimeDeadline(startTime, HH:mm, zone)` — startTime's date (in `zone`, default `slaTimezone`) at the cutoff, rolled +1 day if at/before startTime. The explicit `ZoneId` parameter makes the overnight roll correct for non-UTC business cutoffs |
 | `"PT2H30M"` (ISO-8601 duration) | `deadline = startTime + duration×(1+thresholdPercent/100) + lateBand`; `baselineDurationMs = duration` | same |
 | blank/null | **always-on** fallback chain: `expectedDurationMs` → profile avg (needs `minSampleSize` samples) → ungraded (`obs.sla.baseline.ungraded` counter) | same |
 
@@ -171,7 +171,7 @@ Two mechanisms:
 
 1. **On-write** (`SlaEvaluationService`): grades the run's actual duration against the frozen `slaTime` — `≤ edge` → ON_TIME; `≤ edge + bandGap` → LATE/MEDIUM; beyond → VERY_LATE/HIGH; `FAILED`/`TIMEOUT` → CRITICAL. (The old absolute-time and 150%-of-expected checks were removed; there is no start-time breach.)
 
-2. **Live** (`LiveSlaBreachDetectionJob`): on `observability.sla.live-detection.interval-ms` (default `15000` ms), queries Redis sorted set for runs past their frozen deadline, marks `sla_breached=true`, fires `SlaBreachedEvent`. Severity is based on minutes past the deadline using the band gap. Early warning runs on `observability.sla.early-warning.interval-ms` (default `60000` ms).
+2. **Live** (`LiveSlaBreachDetectionJob`): on `observability.sla.live-detection.interval-ms` (default `15000` ms), queries Redis sorted set for runs past their frozen deadline, marks `sla_breached=true`, fires `SlaBreachedEvent`. Severity is based on minutes past the deadline using the band gap. Early warning runs on `observability.sla.early-warning.interval-ms` (default `60000` ms). A **DB fallback sweep** (`sweepOverdueRunsFromDb`, `observability.sla.live-detection.db-sweep-interval-ms`, default `120000` ms) backstops Redis: it queries `findOverdueRunningRuns()` directly so an overdue run still breaches even if its Redis deadline entry was lost (eviction, flush, cold cache). Each `markSlaBreach` + publish is wrapped in a per-run `TransactionTemplate`, so `SlaBreachedEvent` keeps AFTER_COMMIT semantics on the live, sweep, and on-completion publication sites.
 
 SLA monitoring now covers **DAILY and MONTHLY** (any run with a derived deadline), controlled by `observability.sla.live-tracking.enabled` (default: `true`).
 
@@ -225,5 +225,7 @@ Environment variables override defaults: `POSTGRES_HOST`, `POSTGRES_DB`, `POSTGR
 | TD-9 | No per-endpoint latency tracking (only batch has a Timer) | Observability gap |
 | TD-10 | `application-dev.yml` and `application-prod.yml` have stale JPA/Hibernate config | Misleading |
 | TD-11 | Alert delivery is log-only   no external notification channel wired | Feature gap |
+| TD-12 | Duration-based/fallback SLA deadlines are **start-anchored** — a late-starting run gets a correspondingly late deadline, so upstream lateness is invisible to SLA grading. Mitigation: prefer `T+N@HH:mm` specs for business-cutoff calculators. (Needs no code change; documented decision.) | Detection gap |
+| TD-13 | MONTHLY bare-clock **overnight roll** grants ~24h grace to a run that starts *after* its cutoff (the roll can't distinguish a legitimate overnight window from a late start). Needs business sign-off on a threshold before fixing. | Detection gap |
 
 

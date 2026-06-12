@@ -18,8 +18,22 @@ public record CalculatorProfile(
         long avgDurationMs,
         int avgStartMinUtc,
         int avgEndMinUtc,
-        int totalRuns
+        int totalRuns,
+        ProfileConfidence confidence
 ) {
+    /**
+     * How precise the profile is for the slice that was requested. {@code null} on the
+     * zero-sample sentinel and on profiles built before confidence was tracked.
+     */
+    public enum ProfileConfidence {
+        /** ≥ minSampleSize samples from the exact aggregate slice. */
+        EXACT,
+        /** 1..(minSampleSize-1) samples from the exact aggregate slice — precise, low count. */
+        SPARSE_EXACT,
+        /** Built from the last N raw runs in {@code calculator_runs} (aggregate had no rows). */
+        RECENT_EXACT
+    }
+
     @JsonCreator
     public CalculatorProfile(
             @JsonProperty("calculatorName") String calculatorName,
@@ -29,7 +43,8 @@ public record CalculatorProfile(
             @JsonProperty("avgDurationMs") long avgDurationMs,
             @JsonProperty("avgStartMinUtc") int avgStartMinUtc,
             @JsonProperty("avgEndMinUtc") int avgEndMinUtc,
-            @JsonProperty("totalRuns") int totalRuns) {
+            @JsonProperty("totalRuns") int totalRuns,
+            @JsonProperty("confidence") ProfileConfidence confidence) {
         this.calculatorName = calculatorName;
         this.frequency = frequency;
         this.runNumber = runNumber;
@@ -38,6 +53,20 @@ public record CalculatorProfile(
         this.avgStartMinUtc = avgStartMinUtc;
         this.avgEndMinUtc = avgEndMinUtc;
         this.totalRuns = totalRuns;
+        this.confidence = confidence;
+    }
+
+    /** Backward-compatible constructor — confidence defaults to {@code null}. */
+    public CalculatorProfile(String calculatorName, String frequency, String runNumber, String dimensionValue,
+                             long avgDurationMs, int avgStartMinUtc, int avgEndMinUtc, int totalRuns) {
+        this(calculatorName, frequency, runNumber, dimensionValue,
+                avgDurationMs, avgStartMinUtc, avgEndMinUtc, totalRuns, null);
+    }
+
+    /** Returns a copy of this profile tagged with the given confidence. */
+    public CalculatorProfile withConfidence(ProfileConfidence confidence) {
+        return new CalculatorProfile(calculatorName, frequency, runNumber, dimensionValue,
+                avgDurationMs, avgStartMinUtc, avgEndMinUtc, totalRuns, confidence);
     }
 
     /**

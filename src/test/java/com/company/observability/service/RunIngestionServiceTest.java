@@ -268,8 +268,9 @@ class RunIngestionServiceTest {
     }
 
     @Test
-    void startRun_clockMode_estimatedEndDefaultsToDeadlineWhenNoDuration() {
-        // In CLOCK_TIME mode with no duration baseline, estimatedEndTime = deadline.
+    void startRun_clockMode_estimatedEndIsNullWhenNoDuration() {
+        // With no duration baseline and an empty profile, estimatedEndTime is persisted null —
+        // the frozen clock deadline is carried only by slaTime (consumers fall back to it).
         ReflectionTestUtils.setField(service, "liveTrackingEnabled", true);
 
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
@@ -294,7 +295,7 @@ class RunIngestionServiceTest {
         service.startRun(request, "tenant-1");
 
         verify(runRepository).upsert(argThat(run ->
-                clockDeadline.equals(run.getEstimatedEndTime())
+                run.getEstimatedEndTime() == null
                         && clockDeadline.equals(run.getSlaTime())));
     }
 

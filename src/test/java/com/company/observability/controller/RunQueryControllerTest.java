@@ -26,6 +26,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -122,6 +123,38 @@ class RunQueryControllerTest {
                 .andExpect(jsonPath("$.runNumber").doesNotExist());
 
         verify(calculatorStateService).getState(any(), any(), isNull(), any());
+    }
+
+    @Test
+    void batchRuns_runningEntry_setsShortCacheControl() throws Exception {
+        var runEntry = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-1").status("RUNNING").isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("capital", null, List.of(runEntry));
+        when(calculatorStateService.getState(any(), any(), isNull(), eq(List.of("capital"))))
+                .thenReturn(Map.of("capital", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-06")
+                        .param("keys", "capital")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "max-age=5, private"));
+    }
+
+    @Test
+    void batchRuns_allTerminal_setsLongCacheControl() throws Exception {
+        var runEntry = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-1").status("SUCCESS").isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("capital", null, List.of(runEntry));
+        when(calculatorStateService.getState(any(), any(), isNull(), eq(List.of("capital"))))
+                .thenReturn(Map.of("capital", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-06")
+                        .param("keys", "capital")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "max-age=30, private"));
     }
 
     @Test
