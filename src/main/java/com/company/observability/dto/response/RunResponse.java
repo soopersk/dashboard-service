@@ -10,6 +10,7 @@ public record RunResponse(
         Instant startTime,
         Instant endTime,
         Long durationMs,
+        Instant slaDeadline,
         String slaBand,
         String slaBreachReason
 ) {}

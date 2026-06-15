@@ -48,6 +48,9 @@ public class SlaProperties {
     /** Profile-computation window. Feeds SLA baselines/estimates. */
     private Lookback lookback = new Lookback();
 
+    /** When true, the {@code as_of} request parameter is honoured for SLA grading of NOT_STARTED entries. */
+    private boolean allowReferenceTime = false;
+
     public long lateBandMs() {
         return lateBandMinutes * 60_000L;
     }

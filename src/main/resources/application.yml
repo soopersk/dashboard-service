@@ -100,6 +100,7 @@ observability:
 
     # Shared across all slaTime spec kinds: bands grade the actual duration against the
     # frozen slaTime; lookback is the profile-computation window.
+    allow-reference-time: false    # enable as_of param for local/dev SLA testing only
     late-band-minutes: 15          # ON_TIME upper edge beyond the frozen slaTime
     very-late-band-minutes: 30     # LATE upper edge beyond the frozen slaTime
     min-sample-size: 5             # runs required before trusting the average

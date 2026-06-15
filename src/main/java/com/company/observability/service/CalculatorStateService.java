@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -35,6 +36,7 @@ public class CalculatorStateService {
     private final SlaProperties slaProperties;
     private final CalculatorStateCacheService stateCache;
     private final CalculatorProfileService profileService;
+    private final Clock clock;
 
     // Lower index = worse status (worst-wins ordering mirrors LogicalRunGrouper)
     private static final List<RunStatus> STATUS_PRECEDENCE = List.of(
@@ -156,6 +158,8 @@ public class CalculatorStateService {
         // from the latest run's reportingDate→slaTime distance; else fall back to run_number.
         int offsetDays = deriveOffsetDays(latest, freq, runNumber);
         LocalDate executionDate = TimeUtils.nextBusinessDay(date, offsetDays);
+        log.debug("event=batch_runs.not_started.offset calculator={} freq={} reportingDate={} executionDate={} offsetDays={}",
+                name, freq, date, executionDate, offsetDays);
 
         // ── Estimates (display) ──────────────────────────────────────────────
         // 1a. Run_number-scoped profile (Redis-cached 26h — very cheap)
@@ -169,8 +173,9 @@ public class CalculatorStateService {
             estStart = TimeUtils.instantFromUtcMinuteOfDay(executionDate, profile.avgStartMinUtc());
             estEnd = estStart.plusMillis(profile.avgDurationMs());
             expectedMs = profile.avgDurationMs();
-            log.debug("event=batch_runs.not_started source=profile calculator={} date={} executionDate={}",
-                    name, date, executionDate);
+            log.debug("event=batch_runs.not_started source=profile calculator={} date={} executionDate={} " +
+                      "estStart={} estEnd={} expectedMs={} profileSamples={}",
+                    name, date, executionDate, estStart, estEnd, expectedMs, profile.totalRuns());
         }
 
         // The profile path supplies estimates but no id; carry the latest run's id when present
@@ -189,7 +194,9 @@ public class CalculatorStateService {
             estEnd = estStart.plusMillis(latest.getExpectedDurationMs());
             expectedMs = latest.getExpectedDurationMs();
             calculatorId = latest.getCalculatorId();
-            log.debug("event=batch_runs.not_started source=latest_run calculator={} date={}", name, date);
+            log.debug("event=batch_runs.not_started source=latest_run calculator={} date={} executionDate={} " +
+                      "estStart={} estEnd={} expectedMs={}",
+                    name, date, executionDate, estStart, estEnd, expectedMs);
         }
 
         // ── Deadline (calculator-level, independent of estimate source) ──────
@@ -197,6 +204,8 @@ public class CalculatorStateService {
         if (latest != null && latest.getSlaTime() != null) {
             projectedSla = projectSlaTime(latest, date, freq, executionDate, estStart);
         }
+        log.debug("event=batch_runs.not_started.sla_projection calculator={} date={} historicalSla={} projectedSla={}",
+                name, date, latest != null ? latest.getSlaTime() : null, projectedSla);
 
         if (estStart == null && projectedSla == null) {
             // Brand-new calculator with no history — return empty
@@ -256,11 +265,10 @@ public class CalculatorStateService {
     private CalculatorEntry entryWithSyntheticRun(String name, String calculatorId,
                                                    Instant estStart, Instant estEnd,
                                                    Long expectedMs, Instant projectedSla) {
-        // Grade against the projected SLA deadline when we have one; only fall back to the
-        // estimated end (profile path, no historical SLA) when no deadline is projectable.
-        Instant gradeAgainst = projectedSla != null ? projectedSla : estEnd;
         ExpectedRunsService.SlaEval sla =
-                ExpectedRunsService.evaluateSlaStatus(gradeAgainst, slaProperties.bandGapMs());
+                ExpectedRunsService.evaluateSlaStatus(projectedSla, slaProperties.bandGapMs(), clock.instant());
+        log.debug("event=batch_runs.not_started.sla_eval calculator={} projectedSla={} slaStatus={} slaBreached={}",
+                name, projectedSla, sla.slaStatus(), sla.slaBreached());
         RunEntry synthetic = RunEntry.builder()
                 .status("NOT_STARTED")
                 .slaStatus(sla.slaStatus())

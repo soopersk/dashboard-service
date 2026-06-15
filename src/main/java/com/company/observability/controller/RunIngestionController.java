@@ -93,6 +93,7 @@ public class RunIngestionController {
         return new RunResponse(
                 run.getRunId(), run.getCalculatorId(), run.getCalculatorName(),
                 run.getStatus().name(), run.getStartTime(), run.getEndTime(),
-                run.getDurationMs(), run.getSlaBand() != null ? run.getSlaBand().name() : null, run.getSlaBreachReason());
+                run.getDurationMs(), run.getSlaTime(),
+                run.getSlaBand() != null ? run.getSlaBand().name() : null, run.getSlaBreachReason());
     }
 }

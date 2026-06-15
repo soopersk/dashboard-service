@@ -8,8 +8,10 @@ import com.company.observability.dto.response.CalculatorBatchRunsResponse.Calcul
 import com.company.observability.dto.response.CalculatorBatchRunsResponse.RunEntry;
 import com.company.observability.util.TimeUtils;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -25,11 +27,13 @@ import java.util.stream.Collectors;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ExpectedRunsService {
 
     private final CalculatorProperties props;
     private final CalculatorProfileService profileService;
     private final SlaProperties slaProps;
+    private final Clock clock;
 
     /**
      * For each alias with a declared region/run-type set, pads its {@link CalculatorEntry} to the
@@ -112,6 +116,10 @@ public class ExpectedRunsService {
 
         if (calculatorDeadline == null && template != null) {
             calculatorDeadline = template.sla();
+            // estEnd fallback: when no explicit SLA, estimatedEndTime acts as a soft deadline
+            if (calculatorDeadline == null) {
+                calculatorDeadline = template.estimatedEndTime();
+            }
         }
 
         // Profiles are keyed by real calculator_name, not alias.
@@ -171,9 +179,11 @@ public class ExpectedRunsService {
             expectedMs = template.expectedDurationMs();
         }
 
-        // Grade against calculator-level deadline; fall back to estEnd only when no deadline is derivable.
-        Instant gradeAgainst = calculatorDeadline != null ? calculatorDeadline : estEnd;
-        SlaEval eval = evaluateSlaStatus(gradeAgainst, slaProps.bandGapMs());
+        SlaEval eval = evaluateSlaStatus(calculatorDeadline, slaProps.bandGapMs(), clock.instant());
+        log.debug("event=batch_runs.placeholder calculator={} dimension={} source={} estStart={} estEnd={} deadline={} slaStatus={}",
+                realName, dimValue,
+                dimProfile.hasSufficientSamples(slaProps.getMinSampleSize()) ? "dim_profile" : "template",
+                estStart, estEnd, calculatorDeadline, eval.slaStatus());
 
         return RunEntry.builder()
                 .status("NOT_STARTED")
@@ -198,16 +208,13 @@ public class ExpectedRunsService {
     record SlaEval(String slaStatus, Boolean slaBreached) {}
 
     static SlaEval evaluateSlaStatus(Instant deadline, long bandGapMs) {
-        if (deadline == null) {
-            return new SlaEval("ON_TIME", false);
-        }
-        Instant now = Instant.now();
-        if (!now.isAfter(deadline)) {
-            return new SlaEval("ON_TIME", false);
-        }
-        if (!now.isAfter(deadline.plusMillis(bandGapMs))) {
-            return new SlaEval("LATE", true);
-        }
+        return evaluateSlaStatus(deadline, bandGapMs, Instant.now());
+    }
+
+    static SlaEval evaluateSlaStatus(Instant deadline, long bandGapMs, Instant now) {
+        if (deadline == null) return new SlaEval("ON_TIME", false);
+        if (!now.isAfter(deadline)) return new SlaEval("ON_TIME", false);
+        if (!now.isAfter(deadline.plusMillis(bandGapMs))) return new SlaEval("LATE", true);
         return new SlaEval("VERY_LATE", true);
     }
 }

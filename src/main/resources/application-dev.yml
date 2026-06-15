@@ -5,6 +5,8 @@ logging:
     org.hibernate.SQL: DEBUG
 
 observability:
+  sla:
+    allow-reference-time: true
   calculator:
     aliases:
       capital: [capitalcalcdev]

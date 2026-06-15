@@ -56,7 +56,7 @@ public record CalculatorProfile(
         this.confidence = confidence;
     }
 
-    /** Backward-compatible constructor — confidence defaults to {@code null}. */
+    /** Convenience constructor for callers that have no confidence yet (sentinels, pre-averaged rows) */
     public CalculatorProfile(String calculatorName, String frequency, String runNumber, String dimensionValue,
                              long avgDurationMs, int avgStartMinUtc, int avgEndMinUtc, int totalRuns) {
         this(calculatorName, frequency, runNumber, dimensionValue,

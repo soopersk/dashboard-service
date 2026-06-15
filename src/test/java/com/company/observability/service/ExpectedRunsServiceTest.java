@@ -12,6 +12,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -21,7 +22,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
-import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -34,12 +34,14 @@ class ExpectedRunsServiceTest {
     private static final LocalDate DATE = LocalDate.of(2026, 3, 6);
     private static final Frequency FREQ = Frequency.DAILY;
     private static final String RUN_NUMBER = "2";
+    private static final Instant REF = Instant.parse("2026-03-06T14:45:00Z");
 
     // Zero-sample profile — not enough history; service falls back to template / bare placeholder.
     private static final CalculatorProfile NO_HISTORY =
             new CalculatorProfile("capital", "DAILY", "2", null, 0, 0, 0, 0);
 
     @Mock private CalculatorProfileService profileService;
+    @Mock private Clock clock;
 
     private final SlaProperties slaProps = new SlaProperties();
     private CalculatorProperties props;
@@ -53,7 +55,8 @@ class ExpectedRunsServiceTest {
         // Default: no dimension-specific history — falls back to template/bare
         lenient().when(profileService.getProfile(anyString(), any(Frequency.class), anyString(), anyString()))
                 .thenReturn(NO_HISTORY);
-        service = new ExpectedRunsService(props, profileService, slaProps);
+        lenient().when(clock.instant()).thenReturn(REF);
+        service = new ExpectedRunsService(props, profileService, slaProps, clock);
     }
 
     private Map<String, CalculatorEntry> pad(Map<String, CalculatorEntry> in) {
@@ -176,7 +179,7 @@ class ExpectedRunsServiceTest {
 
     @Test
     void partialBatch_placeholdersGradeAgainstSiblingFrozenSla_beforeDeadline_onTime() {
-        Instant futureDeadline = Instant.now().plusSeconds(3600);
+        Instant futureDeadline = REF.plusSeconds(3600);
         List<RunEntry> sevenRuns = List.of(
                 realRegionEntryWithSla("WMAP", futureDeadline),
                 realRegionEntry("WMDE"), realRegionEntry("ASIA"),
@@ -200,7 +203,7 @@ class ExpectedRunsServiceTest {
 
     @Test
     void partialBatch_placeholdersGradeAgainstSiblingFrozenSla_pastDeadline_late() {
-        Instant pastDeadline = Instant.now().minusSeconds(300); // within band gap
+        Instant pastDeadline = REF.minusSeconds(300); // within band gap
         List<RunEntry> sevenRuns = List.of(
                 realRegionEntryWithSla("WMAP", pastDeadline),
                 realRegionEntry("WMDE"), realRegionEntry("ASIA"),
@@ -223,7 +226,7 @@ class ExpectedRunsServiceTest {
 
     @Test
     void partialBatch_placeholdersGradeAgainstSiblingFrozenSla_veryPastDeadline_veryLate() {
-        Instant veryPastDeadline = Instant.now().minusSeconds(2000); // beyond band gap
+        Instant veryPastDeadline = REF.minusSeconds(2000); // beyond band gap
         List<RunEntry> sevenRuns = List.of(
                 realRegionEntryWithSla("WMAP", veryPastDeadline),
                 realRegionEntry("WMDE"), realRegionEntry("ASIA"),
@@ -244,8 +247,8 @@ class ExpectedRunsServiceTest {
 
     @Test
     void partialBatch_noSiblingDeadline_usesTemplateSla() {
-        Instant templateSla = Instant.now().plusSeconds(7200);
-        Instant estEnd = Instant.now().plusSeconds(3600);
+        Instant templateSla = REF.plusSeconds(7200);
+        Instant estEnd = REF.plusSeconds(3600);
         RunEntry template = RunEntry.builder()
                 .status("NOT_STARTED").slaStatus("ON_TIME").sla(templateSla)
                 .estimatedEndTime(estEnd).isRerun(false).build();
@@ -283,7 +286,7 @@ class ExpectedRunsServiceTest {
 
     @Test
     void partialBatch_noDeadlineNoProfile_usesEstEndFallback() {
-        Instant estEnd = Instant.now().minusSeconds(500);  // past
+        Instant estEnd = REF.minusSeconds(500);  // past
         RunEntry template = RunEntry.builder()
                 .status("NOT_STARTED").slaStatus("ON_TIME")
                 .estimatedEndTime(estEnd).sla(null).isRerun(false).build();
@@ -393,7 +396,7 @@ class ExpectedRunsServiceTest {
     @Test
     void noDimensionConfig_returnsInputUnchanged() {
         ExpectedRunsService bare = new ExpectedRunsService(
-                new CalculatorProperties(), profileService, slaProps);
+                new CalculatorProperties(), profileService, slaProps, clock);
         Map<String, CalculatorEntry> input = Map.of(
                 "capital", new CalculatorEntry("capital", "id", List.of(realRegionEntry("WMAP"))));
 
@@ -404,28 +407,28 @@ class ExpectedRunsServiceTest {
 
     @Test
     void evaluateSlaStatus_futureDeadline_returnsOnTime() {
-        var eval = ExpectedRunsService.evaluateSlaStatus(Instant.now().plusSeconds(3600), slaProps.bandGapMs());
+        var eval = ExpectedRunsService.evaluateSlaStatus(REF.plusSeconds(3600), slaProps.bandGapMs(), REF);
         assertThat(eval.slaStatus()).isEqualTo("ON_TIME");
         assertThat(eval.slaBreached()).isFalse();
     }
 
     @Test
     void evaluateSlaStatus_pastDeadlineWithinBandGap_returnsLate() {
-        var eval = ExpectedRunsService.evaluateSlaStatus(Instant.now().minusSeconds(300), slaProps.bandGapMs());
+        var eval = ExpectedRunsService.evaluateSlaStatus(REF.minusSeconds(300), slaProps.bandGapMs(), REF);
         assertThat(eval.slaStatus()).isEqualTo("LATE");
         assertThat(eval.slaBreached()).isTrue();
     }
 
     @Test
     void evaluateSlaStatus_pastDeadlineBeyondBandGap_returnsVeryLate() {
-        var eval = ExpectedRunsService.evaluateSlaStatus(Instant.now().minusSeconds(2000), slaProps.bandGapMs());
+        var eval = ExpectedRunsService.evaluateSlaStatus(REF.minusSeconds(2000), slaProps.bandGapMs(), REF);
         assertThat(eval.slaStatus()).isEqualTo("VERY_LATE");
         assertThat(eval.slaBreached()).isTrue();
     }
 
     @Test
     void evaluateSlaStatus_nullDeadline_returnsOnTime() {
-        var eval = ExpectedRunsService.evaluateSlaStatus(null, slaProps.bandGapMs());
+        var eval = ExpectedRunsService.evaluateSlaStatus(null, slaProps.bandGapMs(), REF);
         assertThat(eval.slaStatus()).isEqualTo("ON_TIME");
         assertThat(eval.slaBreached()).isFalse();
     }

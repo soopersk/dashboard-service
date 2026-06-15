@@ -15,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.HashMap;
@@ -38,6 +39,9 @@ class CalculatorStateServiceTest {
     @Mock
     CalculatorProfileService profileService;
 
+    @Mock
+    Clock clock;
+
     // Real SlaProperties — still needed for getMinSampleSize() (profile estimation path).
     CalculatorStateService service;
 
@@ -56,9 +60,10 @@ class CalculatorStateServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(clock.instant()).thenReturn(NOW);
         service = new CalculatorStateService(
                 runRepository, new SlaProperties(),
-                stateCache, profileService);
+                stateCache, profileService, clock);
         // Default: cache returns no hits (all misses) so DB is called — matches all pre-existing tests
         lenient().when(stateCache.getEntries(any(), anyString(), any(), any()))
                 .thenReturn(new HashMap<>());
@@ -296,6 +301,12 @@ class CalculatorStateServiceTest {
         when(profileService.getProfile(eq("calc"), eq(FREQ), eq("1"))).thenReturn(profile);
         when(runRepository.findAllRunsByDateAndDimension(eq(friday), eq(FREQ), eq("1"), any()))
                 .thenReturn(List.of());
+        // Provide a minimal latest run so the WP11 unknown-run-number guard does not fire;
+        // no slaTime → offset falls back to parseRunNumber("1") = 1 → T+1 = Monday
+        CalculatorRun latestRun = new CalculatorRun();
+        latestRun.setCalculatorName("calc");
+        when(runRepository.findLatestRunEstimatesByName(eq("calc"), eq(FREQ), eq("1"), anyInt()))
+                .thenReturn(Optional.of(latestRun));
 
         var entries = service.getState(friday, FREQ, "1", List.of("calc")).get("calc").runs();
 
