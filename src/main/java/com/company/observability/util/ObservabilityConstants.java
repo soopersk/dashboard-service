@@ -59,7 +59,8 @@ public final class ObservabilityConstants {
     public static final String CACHE_ANALYTICS_EVICTION = "obs.cache.analytics.eviction";
     public static final String CACHE_STATE_HIT = "obs.cache.state.hit";
     public static final String CACHE_STATE_MISS = "obs.cache.state.miss";
-    public static final String CACHE_STATE_EVICTION = "obs.cache.state.eviction";
+    public static final String CACHE_STATE_EVICTION         = "obs.cache.state.eviction";
+    public static final String CACHE_STATE_EVICTION_FAILURE = "obs.cache.state.eviction.failure";
 
     // ================================================================
     // DB layer (repositories)

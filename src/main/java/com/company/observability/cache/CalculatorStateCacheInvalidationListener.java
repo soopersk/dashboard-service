@@ -31,19 +31,28 @@ public class CalculatorStateCacheInvalidationListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
     public void onRunStarted(RunStartedEvent event) {
-        evict(event.getRun());
+        CalculatorRun run = event.getRun();
+        log.debug("event=state.cache.invalidate trigger=run_started calculator={} runNumber={} reportingDate={}",
+                run.getCalculatorName(), run.getRunNumber(), run.getReportingDate());
+        evict(run);
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
     public void onRunCompleted(RunCompletedEvent event) {
-        evict(event.getRun());
+        CalculatorRun run = event.getRun();
+        log.debug("event=state.cache.invalidate trigger=run_completed calculator={} runNumber={} reportingDate={}",
+                run.getCalculatorName(), run.getRunNumber(), run.getReportingDate());
+        evict(run);
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
     public void onSlaBreached(SlaBreachedEvent event) {
-        evict(event.getRun());
+        CalculatorRun run = event.getRun();
+        log.debug("event=state.cache.invalidate trigger=sla_breached calculator={} runNumber={} reportingDate={}",
+                run.getCalculatorName(), run.getRunNumber(), run.getReportingDate());
+        evict(run);
     }
 
     private void evict(CalculatorRun run) {

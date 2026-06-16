@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -56,7 +57,10 @@ public class CalculatorStateCacheService {
     static final Duration TTL_ANY_RUNNING            = Duration.ofSeconds(30);
     static final Duration TTL_NOT_STARTED            = Duration.ofSeconds(60);
     static final Duration TTL_TERMINAL_WITH_FAILURES = Duration.ofMinutes(5);
-    static final Duration TTL_TERMINAL_CLEAN         = Duration.ofHours(4);
+    static final Duration TTL_TERMINAL_CLEAN         = Duration.ofHours(1);
+
+    private static final int DAILY_STABILITY_DAYS     = 7;
+    private static final int MONTHLY_STABILITY_MONTHS = 1;
 
     // ── Read ──────────────────────────────────────────────────────────────────
 
@@ -101,7 +105,7 @@ public class CalculatorStateCacheService {
 
         entries.forEach((name, entry) -> {
             String key = buildKey(name, reportingDate, frequency, runNumber);
-            Duration ttl = determineTtl(entry, reportingDate);
+            Duration ttl = determineTtl(entry, reportingDate, frequency);
             try {
                 String json = objectMapper.writeValueAsString(entry);
                 redisTemplate.opsForValue().set(key, json, ttl);
@@ -128,10 +132,11 @@ public class CalculatorStateCacheService {
             keys.add(buildKey(calculatorName, reportingDate, frequency, runNumber));
         }
         try {
-            redisTemplate.delete(keys);
+            Long deleted = redisTemplate.delete(keys);
             meterRegistry.counter(CACHE_STATE_EVICTION, "calculator", calculatorName).increment();
-            log.debug("event=state.cache.evict outcome=success keys={}", keys);
+            log.debug("event=state.cache.evict outcome=success keys={} deleted={}/{}", keys, deleted, keys.size());
         } catch (Exception e) {
+            meterRegistry.counter(CACHE_STATE_EVICTION_FAILURE, "calculator", calculatorName).increment();
             log.warn("event=state.cache.evict outcome=failure keys={} error={}", keys, e.getMessage());
         }
     }
@@ -141,7 +146,7 @@ public class CalculatorStateCacheService {
     /**
      * State-aware TTL selection based on the run states in the entry and the reporting date.
      */
-    Duration determineTtl(CalculatorEntry entry, LocalDate reportingDate) {
+    Duration determineTtl(CalculatorEntry entry, LocalDate reportingDate, String frequency) {
         List<RunEntry> runs = entry.runs();
 
         if (runs == null || runs.isEmpty()) {
@@ -176,8 +181,15 @@ public class CalculatorStateCacheService {
         }
 
         // A SUCCESS snapshot may still be partial (later regions / re-triggers after SUCCESS).
-        // Only an old reporting date is truly stable. The 3-day horizon mirrors the DAILY query window.
-        return reportingDate.isBefore(LocalDate.now().minusDays(3))
+        // MONTHLY: stable once 2+ full calendar months in the past (re-trigger window is the following month).
+        // DAILY: stable after 7 days (full working week horizon).
+        if ("MONTHLY".equals(frequency)) {
+            YearMonth reportingMonth = YearMonth.from(reportingDate);
+            return reportingMonth.isBefore(YearMonth.now().minusMonths(MONTHLY_STABILITY_MONTHS))
+                    ? TTL_TERMINAL_CLEAN
+                    : TTL_TERMINAL_WITH_FAILURES;
+        }
+        return reportingDate.isBefore(LocalDate.now().minusDays(DAILY_STABILITY_DAYS))
                 ? TTL_TERMINAL_CLEAN
                 : TTL_TERMINAL_WITH_FAILURES;
     }

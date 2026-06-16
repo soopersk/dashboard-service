@@ -15,6 +15,7 @@ import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.List;
 import java.util.Map;
 
@@ -51,38 +52,38 @@ class CalculatorStateCacheServiceTest {
     @Test
     void determineTtl_emptyRuns_returnsNotStarted() {
         CalculatorEntry entry = new CalculatorEntry("calc", null, List.of());
-        assertThat(service.determineTtl(entry, DATE)).isEqualTo(TTL_NOT_STARTED);
+        assertThat(service.determineTtl(entry, DATE, "DAILY")).isEqualTo(TTL_NOT_STARTED);
     }
 
     @Test
     void determineTtl_anyRunning_returns30s() {
         CalculatorEntry entry = new CalculatorEntry("calc", null, List.of(runEntry("RUNNING", null)));
-        assertThat(service.determineTtl(entry, DATE)).isEqualTo(TTL_ANY_RUNNING);
+        assertThat(service.determineTtl(entry, DATE, "DAILY")).isEqualTo(TTL_ANY_RUNNING);
     }
 
     @Test
     void determineTtl_slaBreached_returnsTerminalWithFailures() {
         CalculatorEntry entry = new CalculatorEntry("calc", null, List.of(runEntry("SUCCESS", "VERY_LATE")));
-        assertThat(service.determineTtl(entry, DATE)).isEqualTo(TTL_TERMINAL_WITH_FAILURES);
+        assertThat(service.determineTtl(entry, DATE, "DAILY")).isEqualTo(TTL_TERMINAL_WITH_FAILURES);
     }
 
     @Test
     void determineTtl_terminalFailure_returnsTerminalWithFailures() {
         CalculatorEntry entry = new CalculatorEntry("calc", null, List.of(runEntry("FAILED", null)));
-        assertThat(service.determineTtl(entry, DATE)).isEqualTo(TTL_TERMINAL_WITH_FAILURES);
+        assertThat(service.determineTtl(entry, DATE, "DAILY")).isEqualTo(TTL_TERMINAL_WITH_FAILURES);
     }
 
     @Test
-    void determineTtl_cleanSuccessOnOldDate_returns4h() {
+    void determineTtl_cleanSuccessOnOldDate_returns1h() {
         CalculatorEntry entry = new CalculatorEntry("calc", null, List.of(runEntry("SUCCESS", null)));
-        assertThat(service.determineTtl(entry, DATE)).isEqualTo(TTL_TERMINAL_CLEAN);
+        assertThat(service.determineTtl(entry, DATE, "DAILY")).isEqualTo(TTL_TERMINAL_CLEAN);
     }
 
     @Test
     void determineTtl_cleanSuccessOnCurrentDate_returns5min() {
         // Snapshot may still be partial (later regions / re-triggers) on the current cycle → short TTL.
         CalculatorEntry entry = new CalculatorEntry("calc", null, List.of(runEntry("SUCCESS", null)));
-        assertThat(service.determineTtl(entry, TODAY)).isEqualTo(TTL_TERMINAL_WITH_FAILURES);
+        assertThat(service.determineTtl(entry, TODAY, "DAILY")).isEqualTo(TTL_TERMINAL_WITH_FAILURES);
     }
 
     @Test
@@ -90,14 +91,14 @@ class CalculatorStateCacheServiceTest {
         // Not all NOT_STARTED, and not all SUCCESS-clean → short TTL, never the 4h bucket.
         CalculatorEntry entry = new CalculatorEntry("calc", null,
                 List.of(runEntry("SUCCESS", null), runEntry("NOT_STARTED", "ON_TIME")));
-        assertThat(service.determineTtl(entry, DATE)).isEqualTo(TTL_TERMINAL_WITH_FAILURES);
+        assertThat(service.determineTtl(entry, DATE, "DAILY")).isEqualTo(TTL_TERMINAL_WITH_FAILURES);
     }
 
     @Test
     void determineTtl_cancelledOnOldDate_returns5min() {
         // CANCELLED runs are the most likely to be re-triggered → never the long TTL.
         CalculatorEntry entry = new CalculatorEntry("calc", null, List.of(runEntry("CANCELLED", null)));
-        assertThat(service.determineTtl(entry, DATE)).isEqualTo(TTL_TERMINAL_WITH_FAILURES);
+        assertThat(service.determineTtl(entry, DATE, "DAILY")).isEqualTo(TTL_TERMINAL_WITH_FAILURES);
     }
 
     // ── get/put round-trip ────────────────────────────────────────────────────
@@ -165,7 +166,24 @@ class CalculatorStateCacheServiceTest {
     // ── Eviction ──────────────────────────────────────────────────────────────
 
     @Test
+    void determineTtl_cleanSuccessMonthly_lastMonth_returns5min() {
+        LocalDate lastMonthEnd = YearMonth.now().minusMonths(1).atEndOfMonth();
+        CalculatorEntry entry = new CalculatorEntry("calc", null, List.of(runEntry("SUCCESS", null)));
+        assertThat(service.determineTtl(entry, lastMonthEnd, "MONTHLY"))
+                .isEqualTo(TTL_TERMINAL_WITH_FAILURES);
+    }
+
+    @Test
+    void determineTtl_cleanSuccessMonthly_twoMonthsAgo_returns1h() {
+        LocalDate twoMonthsAgoEnd = YearMonth.now().minusMonths(2).atEndOfMonth();
+        CalculatorEntry entry = new CalculatorEntry("calc", null, List.of(runEntry("SUCCESS", null)));
+        assertThat(service.determineTtl(entry, twoMonthsAgoEnd, "MONTHLY"))
+                .isEqualTo(TTL_TERMINAL_CLEAN);
+    }
+
+    @Test
     void evictEntry_withRunNumber_deletesBothKeys() {
+        when(redisTemplate.delete(anyList())).thenReturn(2L);
         service.evictEntry("cap", DATE, FREQ, "1");
 
         verify(redisTemplate).delete(List.of(
@@ -186,6 +204,18 @@ class CalculatorStateCacheServiceTest {
 
         // Should not throw — best-effort
         service.evictEntry("cap", DATE, FREQ, "1");
+    }
+
+    @Test
+    void evictEntry_redisFailure_incrementsFailureCounter() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        service = new CalculatorStateCacheService(redisTemplate, objectMapper, registry);
+        doThrow(new RuntimeException("Redis down")).when(redisTemplate).delete(anyList());
+
+        service.evictEntry("cap", DATE, FREQ, "1");
+
+        assertThat(registry.counter("obs.cache.state.eviction.failure",
+                "calculator", "cap").count()).isEqualTo(1.0);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
