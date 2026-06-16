@@ -57,7 +57,9 @@ public class RunQueryController {
             @RequestParam(defaultValue = "DAILY") String frequency,
             @RequestParam(value = "run_number", required = false) String runNumber,
             @Parameter(description = "Pipe-separated calculator_name values, e.g. capitalcalc|portfoliocalc")
-            @RequestParam @NotBlank String keys) {
+            @RequestParam @NotBlank String keys,
+            @Parameter(description = "Skip cache and fetch directly from DB (refreshes cache on return)")
+            @RequestParam(value = "nocache", defaultValue = "false") boolean nocache) {
 
         List<String> aliases = Arrays.stream(keys.split("\\|"))
                 .map(String::trim)
@@ -86,7 +88,7 @@ public class RunQueryController {
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
             Map<String, CalculatorBatchRunsResponse.CalculatorEntry> byRealName =
-                    calculatorStateService.getState(reportingDate, freq, runNumber, allRealNames);
+                    calculatorStateService.getState(reportingDate, freq, runNumber, allRealNames, nocache);
 
             // Re-group by alias: merge entries from all real names under each alias key
             Map<String, CalculatorBatchRunsResponse.CalculatorEntry> calculators =

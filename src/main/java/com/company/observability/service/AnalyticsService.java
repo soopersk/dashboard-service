@@ -39,14 +39,19 @@ public class AnalyticsService {
      */
     public RunPerformanceData getRunExecutionsByName(
             String calculatorName, int days, Frequency frequency, String runNumber,
-            LocalDate asOfDate) {
+            LocalDate asOfDate, boolean nocache) {
 
         // Normalize blank → null so empty ?run_number= means "all runs" (not filter on empty string)
         String rn = (runNumber == null || runNumber.isBlank()) ? null : runNumber;
 
-        RunPerformanceData cached = cacheService.getFromCache(
-                CACHE_EXECUTIONS, calculatorName, frequency.name(), days, rn,
-                asOfDate, RunPerformanceData.class);
+        if (nocache) {
+            log.debug("event=analytics.cache.bypass calculatorName={} frequency={} days={}",
+                    calculatorName, frequency, days);
+        }
+        RunPerformanceData cached = nocache ? null
+                : cacheService.getFromCache(
+                        CACHE_EXECUTIONS, calculatorName, frequency.name(), days, rn,
+                        asOfDate, RunPerformanceData.class);
         if (cached != null) {
             log.debug("event=executions.cache outcome=hit calculatorName={} frequency={} days={} runNumber={} asOfDate={}",
                     calculatorName, frequency, days, rn, asOfDate);

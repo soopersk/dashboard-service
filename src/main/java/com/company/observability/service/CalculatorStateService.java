@@ -46,14 +46,21 @@ public class CalculatorStateService {
             LocalDate reportingDate,
             Frequency frequency,
             String runNumber,
-            List<String> calculatorNames) {
+            List<String> calculatorNames,
+            boolean nocache) {
 
         // Normalize blank → null so empty ?run_number= means "all runs" (not filter on empty string)
         String rn = (runNumber == null || runNumber.isBlank()) ? null : runNumber;
         String freqName = frequency.name();
 
-        // 1. Cache read — partial hits are fine
-        Map<String, CalculatorEntry> cached = stateCache.getEntries(reportingDate, freqName, rn, calculatorNames);
+        // 1. Cache read — partial hits are fine; skipped when nocache=true (forces full DB fetch)
+        Map<String, CalculatorEntry> cached = nocache
+                ? new HashMap<>()
+                : stateCache.getEntries(reportingDate, freqName, rn, calculatorNames);
+        if (nocache) {
+            log.debug("event=state.cache.bypass calculators={} reportingDate={} frequency={}",
+                    calculatorNames, reportingDate, frequency);
+        }
 
         // 2. Determine misses
         List<String> missNames = calculatorNames.stream()

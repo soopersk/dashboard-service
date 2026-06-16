@@ -53,7 +53,9 @@ public class AnalyticsController {
             @RequestParam(value = "run_number", required = false) String runNumber,
             @Parameter(description = "Anchor date for the lookback window (ISO-8601: yyyy-MM-dd). Defaults to today.")
             @RequestParam(value = "data_as_of_date", required = false)
-            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataAsOfDate) {
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dataAsOfDate,
+            @Parameter(description = "Skip cache and fetch directly from DB (refreshes cache on return)")
+            @RequestParam(value = "nocache", defaultValue = "false") boolean nocache) {
 
         Frequency freq = Frequency.fromStrict(frequency);
         LocalDate effectiveAsOfDate = (dataAsOfDate != null) ? dataAsOfDate : LocalDate.now();
@@ -64,7 +66,7 @@ public class AnalyticsController {
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
             RunPerformanceData response = analyticsService
-                    .getRunExecutionsByName(calculatorName, days, freq, runNumber, effectiveAsOfDate);
+                    .getRunExecutionsByName(calculatorName, days, freq, runNumber, effectiveAsOfDate, nocache);
 
             return ResponseEntity.ok()
                     .cacheControl(CacheControl.maxAge(60, TimeUnit.SECONDS).cachePrivate())

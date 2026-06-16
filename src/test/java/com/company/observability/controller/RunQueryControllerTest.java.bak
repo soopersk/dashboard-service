@@ -105,7 +105,7 @@ class RunQueryControllerTest {
                 .andExpect(status().isOk());
 
         verify(calculatorStateService).getState(any(), any(), isNull(),
-                eq(List.of("capital", "modelled-exposure", "portfolio")), anyBoolean());
+                eq(List.of("capital", "modelled-exposure", "portfolio")));
     }
 
     @Test
@@ -122,7 +122,7 @@ class RunQueryControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.runNumber").doesNotExist());
 
-        verify(calculatorStateService).getState(any(), any(), isNull(), any(), anyBoolean());
+        verify(calculatorStateService).getState(any(), any(), isNull(), any());
     }
 
     @Test

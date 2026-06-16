@@ -19,7 +19,6 @@ import java.util.List;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
@@ -83,7 +82,7 @@ class AnalyticsControllerTest {
                 .andExpect(jsonPath("$.runs[0].subRunIds").doesNotExist());
 
         verify(analyticsService).getRunExecutionsByName(eq("capitalcalc"), eq(30),
-                eq(Frequency.DAILY), isNull(), any(LocalDate.class), anyBoolean());
+                eq(Frequency.DAILY), isNull(), any(LocalDate.class));
     }
 
     @Test
@@ -100,7 +99,7 @@ class AnalyticsControllerTest {
                 .andExpect(status().isOk());
 
         verify(analyticsService).getRunExecutionsByName(eq("capitalcalc"), eq(30),
-                eq(Frequency.DAILY), eq("1"), any(LocalDate.class), anyBoolean());
+                eq(Frequency.DAILY), eq("1"), any(LocalDate.class));
     }
 
     @Test
@@ -119,7 +118,7 @@ class AnalyticsControllerTest {
                 .andExpect(status().isOk());
 
         verify(analyticsService).getRunExecutionsByName(eq("capitalcalc"), eq(30),
-                eq(Frequency.DAILY), isNull(), eq(pastDate), anyBoolean());
+                eq(Frequency.DAILY), isNull(), eq(pastDate));
     }
 
     @Test

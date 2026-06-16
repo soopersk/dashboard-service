@@ -80,7 +80,7 @@ class CalculatorStateServiceTest {
                 .thenReturn(List.of());
 
         Map<String, CalculatorBatchRunsResponse.CalculatorEntry> result =
-                service.getState(DATE, FREQ, "1", List.of("missing-calc"), false);
+                service.getState(DATE, FREQ, "1",List.of("missing-calc"));
 
         assertThat(result).containsKey("missing-calc");
         assertThat(result.get("missing-calc").runs()).isEmpty();
@@ -95,7 +95,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), eq("1"), any()))
                 .thenReturn(List.of(s1, s2, s3));
 
-        var result = service.getState(DATE, FREQ, "1", List.of("cap"), false);
+        var result = service.getState(DATE, FREQ, "1",List.of("cap"));
         var entries = result.get("cap").runs();
 
         assertThat(entries).hasSize(1);
@@ -111,7 +111,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), eq("1"), any()))
                 .thenReturn(List.of(attempt1, attempt2));
 
-        var result = service.getState(DATE, FREQ, "1", List.of("cap"), false);
+        var result = service.getState(DATE, FREQ, "1",List.of("cap"));
         var entries = result.get("cap").runs();
 
         assertThat(entries).hasSize(1);
@@ -128,7 +128,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), eq("1"), any()))
                 .thenReturn(dbRuns);
 
-        var result = service.getState(DATE, FREQ, "1", List.of("capital"), false);
+        var result = service.getState(DATE, FREQ, "1",List.of("capital"));
         var entry = result.get("capital");
 
         assertThat(entry.runs()).hasSize(2);
@@ -151,7 +151,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), eq("1"), any()))
                 .thenReturn(List.of(run));
 
-        var entries = service.getState(DATE, FREQ, "1", List.of("calc"), false).get("calc").runs();
+        var entries = service.getState(DATE, FREQ, "1",List.of("calc")).get("calc").runs();
 
         assertThat(entries).hasSize(1);
         assertThat(entries.get(0).slaStatus()).isNotEqualTo("ON_TIME");
@@ -169,7 +169,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), eq("1"), any()))
                 .thenReturn(List.of(run));
 
-        var entries = service.getState(DATE, FREQ, "1", List.of("calc"), false).get("calc").runs();
+        var entries = service.getState(DATE, FREQ, "1",List.of("calc")).get("calc").runs();
 
         assertThat(entries.get(0).slaStatus()).isEqualTo("LATE");
     }
@@ -186,7 +186,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), eq("1"), any()))
                 .thenReturn(List.of(run));
 
-        var entries = service.getState(DATE, FREQ, "1", List.of("calc"), false).get("calc").runs();
+        var entries = service.getState(DATE, FREQ, "1",List.of("calc")).get("calc").runs();
 
         assertThat(entries.get(0).slaStatus()).isEqualTo("VERY_LATE");
     }
@@ -203,7 +203,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), eq("1"), any()))
                 .thenReturn(List.of(run));
 
-        var entries = service.getState(DATE, FREQ, "1", List.of("calc"), false).get("calc").runs();
+        var entries = service.getState(DATE, FREQ, "1",List.of("calc")).get("calc").runs();
 
         assertThat(entries.get(0).expectedDurationMs()).isEqualTo(5_400_000L);
     }
@@ -223,7 +223,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), eq("1"), any()))
                 .thenReturn(List.of(s1, s2));
 
-        var entries = service.getState(DATE, FREQ, "1", List.of("cap"), false).get("cap").runs();
+        var entries = service.getState(DATE, FREQ, "1",List.of("cap")).get("cap").runs();
 
         assertThat(entries).hasSize(1);
         assertThat(entries.get(0).expectedDurationMs()).isEqualTo(7_200_000L);
@@ -237,7 +237,7 @@ class CalculatorStateServiceTest {
         when(stateCache.getEntries(eq(DATE), eq(FREQ_NAME), isNull(), eq(List.of("cap"))))
                 .thenReturn(Map.of("cap", cachedEntry));
 
-        Map<String, CalculatorEntry> result = service.getState(DATE, FREQ, null, List.of("cap"), false);
+        Map<String, CalculatorEntry> result = service.getState(DATE, FREQ, null, List.of("cap"));
 
         assertThat(result).containsKey("cap");
         verifyNoInteractions(runRepository);
@@ -254,7 +254,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), eq("1"), eq(List.of("other"))))
                 .thenReturn(List.of(run));
 
-        Map<String, CalculatorEntry> result = service.getState(DATE, FREQ, "1", List.of("cap", "other"), false);
+        Map<String, CalculatorEntry> result = service.getState(DATE, FREQ, "1", List.of("cap", "other"));
 
         assertThat(result).containsKey("cap");
         assertThat(result).containsKey("other");
@@ -267,7 +267,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(any(), any(), any(), any()))
                 .thenReturn(List.of());
 
-        service.getState(DATE, FREQ, null, List.of("missing-calc"), false);
+        service.getState(DATE, FREQ, null, List.of("missing-calc"));
 
         // The empty-runs entry must be stored so a subsequent request hits cache, not DB
         verify(stateCache).putEntries(eq(DATE), eq(FREQ_NAME), isNull(), argThat(m ->
@@ -279,7 +279,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(any(), any(), isNull(), any()))
                 .thenReturn(List.of());
 
-        service.getState(DATE, FREQ, "  ", List.of("calc"), false);
+        service.getState(DATE, FREQ, "  ", List.of("calc"));
 
         // Blank must normalise to null before reaching cache and repo
         verify(stateCache).getEntries(eq(DATE), eq(FREQ_NAME), isNull(), any());
@@ -308,7 +308,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findLatestRunEstimatesByName(eq("calc"), eq(FREQ), eq("1"), anyInt()))
                 .thenReturn(Optional.of(latestRun));
 
-        var entries = service.getState(friday, FREQ, "1", List.of("calc"), false).get("calc").runs();
+        var entries = service.getState(friday, FREQ, "1", List.of("calc")).get("calc").runs();
 
         assertThat(entries).hasSize(1);
         assertThat(entries.get(0).status()).isEqualTo("NOT_STARTED");
@@ -342,7 +342,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findLatestRunEstimatesByName(eq("calc"), eq(FREQ), eq("1"), anyInt()))
                 .thenReturn(Optional.of(latest));
 
-        var entries = service.getState(DATE, FREQ, "1", List.of("calc"), false).get("calc").runs();
+        var entries = service.getState(DATE, FREQ, "1", List.of("calc")).get("calc").runs();
 
         assertThat(entries).hasSize(1);
         assertThat(entries.get(0).status()).isEqualTo("NOT_STARTED");
@@ -376,7 +376,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findLatestRunEstimatesByName(eq("calc"), eq(FREQ), isNull(), anyInt()))
                 .thenReturn(Optional.of(latest));
 
-        var entries = service.getState(DATE, FREQ, null, List.of("calc"), false).get("calc").runs();
+        var entries = service.getState(DATE, FREQ, null, List.of("calc")).get("calc").runs();
 
         assertThat(entries).hasSize(1);
         assertThat(entries.get(0).status()).isEqualTo("NOT_STARTED");
@@ -394,7 +394,7 @@ class CalculatorStateServiceTest {
                 .thenReturn(List.of());
         // findLatestRunEstimatesByName already returns Optional.empty() from setUp
 
-        var entries = service.getState(DATE, FREQ, null, List.of("new-calc"), false).get("new-calc").runs();
+        var entries = service.getState(DATE, FREQ, null, List.of("new-calc")).get("new-calc").runs();
 
         assertThat(entries).isEmpty();
     }
@@ -419,7 +419,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findLatestRunEstimatesByName(eq("calc"), eq(FREQ), eq("2"), anyInt()))
                 .thenReturn(Optional.of(latest));
 
-        var entries = service.getState(DATE, FREQ, "2", List.of("calc"), false).get("calc").runs();
+        var entries = service.getState(DATE, FREQ, "2", List.of("calc")).get("calc").runs();
 
         assertThat(entries).hasSize(1);
         // derived N=1 wins over run_number=2 → query Fri 2026-03-06 + 1 biz day = Mon 2026-03-09 at 15:00
@@ -435,7 +435,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), eq("1"), any()))
                 .thenReturn(List.of());
 
-        service.getState(DATE, FREQ, "1", List.of("calc"), false);
+        service.getState(DATE, FREQ, "1", List.of("calc"));
 
         verify(runRepository).findLatestRunEstimatesByName(eq("calc"), eq(FREQ), eq("1"), anyInt());
     }
@@ -450,7 +450,7 @@ class CalculatorStateServiceTest {
                 .thenReturn(List.of());
         // findLatestRunEstimatesByName returns Optional.empty() from setUp — no rn=99 history
 
-        var entries = service.getState(DATE, FREQ, "99", List.of("calc"), false).get("calc").runs();
+        var entries = service.getState(DATE, FREQ, "99", List.of("calc")).get("calc").runs();
 
         assertThat(entries).isEmpty();
         // The projection machinery must not even be consulted
@@ -469,7 +469,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), isNull(), any()))
                 .thenReturn(List.of(run1, run2));
 
-        var entries = service.getState(DATE, FREQ, null, List.of("cap"), false).get("cap").runs();
+        var entries = service.getState(DATE, FREQ, null, List.of("cap")).get("cap").runs();
 
         assertThat(entries).hasSize(2);
         assertThat(entries).extracting(CalculatorBatchRunsResponse.RunEntry::status)
@@ -498,7 +498,7 @@ class CalculatorStateServiceTest {
         when(runRepository.findLatestRunEstimatesByName(eq("calc"), eq(Frequency.MONTHLY), eq("1"), anyInt()))
                 .thenReturn(Optional.of(latest));
 
-        var entries = service.getState(eom, Frequency.MONTHLY, "1", List.of("calc"), false).get("calc").runs();
+        var entries = service.getState(eom, Frequency.MONTHLY, "1", List.of("calc")).get("calc").runs();
 
         assertThat(entries).hasSize(1);
         Instant estStart = entries.get(0).estimatedStartTime();
@@ -507,24 +507,6 @@ class CalculatorStateServiceTest {
         assertThat(entries.get(0).sla()).isEqualTo(
                 com.company.observability.util.TimeUtils.clockTimeDeadline(
                         estStart, java.time.LocalTime.of(2, 0), java.time.ZoneOffset.UTC));
-    }
-
-    // ── nocache bypass ──────────────────────────────────────────────────────
-
-    @Test
-    void getState_nocache_skipsCacheAndFetchesAllFromDb() {
-        when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), isNull(), any()))
-                .thenReturn(List.of());
-
-        service.getState(DATE, FREQ, null, List.of("cap", "other"), true);
-
-        // Cache read must NOT be called — nocache=true skips it entirely
-        verify(stateCache, never()).getEntries(any(), any(), any(), any());
-        // Both names must be fetched from DB (no cache partials)
-        verify(runRepository).findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), isNull(), eq(List.of("cap", "other")));
-        // Fresh result must still be written back to cache
-        verify(stateCache).putEntries(eq(DATE), eq(FREQ_NAME), isNull(), argThat(m ->
-                m.containsKey("cap") && m.containsKey("other")));
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

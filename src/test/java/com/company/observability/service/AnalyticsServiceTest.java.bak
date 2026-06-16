@@ -69,7 +69,7 @@ class AnalyticsServiceTest {
                 any(LocalDate.class), eq(RunPerformanceData.class)))
                 .thenReturn(cached);
 
-        RunPerformanceData result = service.getRunExecutionsByName("cap", 30, Frequency.DAILY, null, LocalDate.now(), false);
+        RunPerformanceData result = service.getRunExecutionsByName("cap", 30, Frequency.DAILY, null, LocalDate.now());
 
         assertEquals(cached, result);
         verifyNoInteractions(calculatorRunRepository);
@@ -83,7 +83,7 @@ class AnalyticsServiceTest {
                 eq("cap"), eq(Frequency.DAILY), eq(30), isNull(), any(LocalDate.class)))
                 .thenReturn(List.of());
 
-        service.getRunExecutionsByName("cap", 30, Frequency.DAILY, null, LocalDate.now(), false);
+        service.getRunExecutionsByName("cap", 30, Frequency.DAILY, null, LocalDate.now());
 
         verify(calculatorRunRepository)
                 .findRunsByName(eq("cap"), eq(Frequency.DAILY), eq(30), isNull(), any(LocalDate.class));
@@ -99,7 +99,7 @@ class AnalyticsServiceTest {
                 eq("cap"), any(), anyInt(), eq("2"), any(LocalDate.class)))
                 .thenReturn(List.of());
 
-        service.getRunExecutionsByName("cap", 30, Frequency.DAILY, "2", LocalDate.now(), false);
+        service.getRunExecutionsByName("cap", 30, Frequency.DAILY, "2", LocalDate.now());
 
         verify(cacheService).getFromCache(
                 eq("executions"), eq("cap"), eq("DAILY"), eq(30), eq("2"), any(LocalDate.class), any());
@@ -114,7 +114,7 @@ class AnalyticsServiceTest {
         when(calculatorRunRepository.findRunsByName(any(), any(), anyInt(), isNull(), any(LocalDate.class)))
                 .thenReturn(List.of());
 
-        service.getRunExecutionsByName("cap", 30, Frequency.DAILY, "  ", LocalDate.now(), false);
+        service.getRunExecutionsByName("cap", 30, Frequency.DAILY, "  ", LocalDate.now());
 
         verify(cacheService).getFromCache(
                 eq("executions"), eq("cap"), eq("DAILY"), eq(30), isNull(), any(LocalDate.class), any());
@@ -159,7 +159,7 @@ class AnalyticsServiceTest {
         when(calculatorProfileService.getProfile(any(), any()))
                 .thenReturn(new com.company.observability.domain.CalculatorProfile("capitalcalc", "DAILY", null, null, 0, 0, 0, 0));
 
-        RunPerformanceData result = aliasService.getRunExecutionsByName("capital", 30, Frequency.DAILY, null, LocalDate.now(), false);
+        RunPerformanceData result = aliasService.getRunExecutionsByName("capital", 30, Frequency.DAILY, null, LocalDate.now());
 
         assertEquals("capital", result.calculatorId());
         assertEquals(2, result.runs().size());
@@ -185,28 +185,11 @@ class AnalyticsServiceTest {
         when(calculatorRunRepository.findRunsByName(eq("portfoliocalc"), any(), anyInt(), any(), any(LocalDate.class)))
                 .thenReturn(List.of());
 
-        aliasService.getRunExecutionsByName("portfolio", 30, Frequency.DAILY, null, LocalDate.now(), false);
+        aliasService.getRunExecutionsByName("portfolio", 30, Frequency.DAILY, null, LocalDate.now());
 
         verify(calculatorRunRepository).findRunsByName(eq("portfoliocalc"), any(), anyInt(), any(), any(LocalDate.class));
         verify(calculatorRunRepository, never()).findRunsByName(eq("portfolio"), any(), anyInt(), any(), any(LocalDate.class));
         verify(cacheService).putInCache(eq("executions"), eq("portfolio"), any(), anyInt(), any(), any(LocalDate.class), any());
-    }
-
-    // ── nocache bypass ──────────────────────────────────────────────────────
-
-    @Test
-    void getRunExecutionsByName_nocache_skipsCacheAndFetchesFromDb() {
-        when(calculatorRunRepository.findRunsByName(any(), any(), anyInt(), any(), any(LocalDate.class)))
-                .thenReturn(List.of());
-
-        service.getRunExecutionsByName("cap", 30, Frequency.DAILY, null, LocalDate.now(), true);
-
-        // Cache read must NOT be called — nocache=true skips it entirely
-        verify(cacheService, never()).getFromCache(any(), any(), any(), anyInt(), any(), any(), any());
-        // DB must be queried regardless
-        verify(calculatorRunRepository).findRunsByName(eq("cap"), eq(Frequency.DAILY), eq(30), isNull(), any(LocalDate.class));
-        // Fresh result must still be written back to cache
-        verify(cacheService).putInCache(eq("executions"), eq("cap"), eq("DAILY"), eq(30), isNull(), any(LocalDate.class), any());
     }
 
     // ── reference line resolution ──────────────────────────────────────────────
@@ -234,7 +217,7 @@ class AnalyticsServiceTest {
                 .thenReturn(new com.company.observability.domain.CalculatorProfile(
                         "Portfolio", "DAILY", null, null, 3_600_000L, 270, 330, 10));
 
-        RunPerformanceData result = service.getRunExecutionsByName("Portfolio", 30, Frequency.DAILY, null, LocalDate.now(), false);
+        RunPerformanceData result = service.getRunExecutionsByName("Portfolio", 30, Frequency.DAILY, null, LocalDate.now());
 
         Instant expectedStart = Instant.parse("2026-05-11T04:30:00Z");
         assertEquals(expectedStart, result.estimatedStartTime());
@@ -262,7 +245,7 @@ class AnalyticsServiceTest {
                 .thenReturn(new com.company.observability.domain.CalculatorProfile(
                         "Portfolio", "DAILY", null, null, 3_600_000L, 270, 330, 10));
 
-        RunPerformanceData result = service.getRunExecutionsByName("Portfolio", 30, Frequency.DAILY, null, LocalDate.now(), false);
+        RunPerformanceData result = service.getRunExecutionsByName("Portfolio", 30, Frequency.DAILY, null, LocalDate.now());
 
         // estStart = day @ 04:30 UTC; buffered = 3_600_000*1.2 + 15m = 72m + 15m = 87m
         Instant expectedStart = Instant.parse("2026-05-11T04:30:00Z");
@@ -277,7 +260,7 @@ class AnalyticsServiceTest {
         when(calculatorRunRepository.findRunsByName(any(), any(), anyInt(), any(), any(LocalDate.class)))
                 .thenReturn(List.of());
 
-        RunPerformanceData result = service.getRunExecutionsByName("cap", 7, Frequency.DAILY, null, LocalDate.now(), false);
+        RunPerformanceData result = service.getRunExecutionsByName("cap", 7, Frequency.DAILY, null, LocalDate.now());
 
         assertEquals("cap", result.calculatorId());
         assertNull(result.calculatorName());
@@ -317,7 +300,7 @@ class AnalyticsServiceTest {
                 .thenReturn(new com.company.observability.domain.CalculatorProfile(
                         "Portfolio", "DAILY", null, null, 0, 0, 0, 0));
 
-        RunPerformanceData result = service.getRunExecutionsByName("Portfolio", 30, Frequency.DAILY, null, LocalDate.now(), false);
+        RunPerformanceData result = service.getRunExecutionsByName("Portfolio", 30, Frequency.DAILY, null, LocalDate.now());
 
         assertEquals(2, result.runs().size());
         assertNull(result.runs().get(0).subRunIds());
