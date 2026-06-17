@@ -1,6 +1,7 @@
 package com.company.observability.service;
 
 import com.company.observability.config.CalculatorProperties;
+import com.company.observability.service.CalculatorNameResolver.Dimension;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -19,6 +20,12 @@ class CalculatorNameResolverTest {
         props.setAliases(Map.of(
                 "capital", List.of("capitalcalc", "capitalcalcmedium"),
                 "portfolio", List.of("portfoliocalc")
+        ));
+         props.setRegions(Map.of(
+                "capital", List.of("AMER", "EMEA", "APAC")
+        ));
+        props.setRunTypes(Map.of(
+                "modelled-exposure", List.of("ETD", "OTC", "SFT")
         ));
         resolver = new CalculatorNameResolver(props);
     }
@@ -89,5 +96,20 @@ class CalculatorNameResolverTest {
     @Test
     void isMultiAlias_unknownName_false() {
         assertThat(resolver.isMultiAlias("anycalc")).isFalse();
+    }
+    @Test
+    void dimensionOf_regionAlias_returnsRegion() {
+        assertThat(resolver.dimensionOf("capital")).isEqualTo(Dimension.REGION);
+    }
+
+    @Test
+    void dimensionOf_runTypeAlias_returnsRunType() {
+        assertThat(resolver.dimensionOf("modelled-exposure")).isEqualTo(Dimension.RUN_TYPE);
+    }
+
+    @Test
+    void dimensionOf_unknownAlias_returnsNone() {
+        assertThat(resolver.dimensionOf("portfolio")).isEqualTo(Dimension.NONE);
+        assertThat(resolver.dimensionOf("someothercalc")).isEqualTo(Dimension.NONE);
     }
 }

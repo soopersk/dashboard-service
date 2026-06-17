@@ -350,6 +350,7 @@ public class CalculatorStateService {
                 .runId(run.getRunId())
                 .region(run.getRegion())
                 .runType(run.getRunType())
+                .runNumber(run.getRunNumber())
                 .status(run.getStatus().name())
                 .slaStatus(run.getSlaBand() != null ? run.getSlaBand().name() : "ON_TIME")
                 .slaBreached(run.isSlaBreached() ? Boolean.TRUE : null)

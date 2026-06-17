@@ -1,11 +1,13 @@
 package com.company.observability.controller;
 
 import com.company.observability.config.TestMetricsConfig;
+import com.company.observability.domain.enums.Dimension;
 import com.company.observability.domain.enums.Frequency;
 import com.company.observability.dto.response.CalculatorBatchRunsResponse;
 import com.company.observability.service.ExpectedRunsService;
 import com.company.observability.service.CalculatorNameResolver;
 import com.company.observability.service.CalculatorStateService;
+import com.company.observability.service.CalculatorNameResolver.Dimension;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -16,6 +18,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import org.junit.jupiter.api.BeforeEach;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -58,6 +61,8 @@ class RunQueryControllerTest {
             for (String a : aliases) result.put(a, List.of(a));
             return result;
         });
+        // Default: NONE dimension so mergeEntries uses the combined key (safe for all existing tests)
+        lenient().when(nameResolver.dimensionOf(any())).thenReturn(Dimension.NONE);
         // Default: padToExpected is a no-op pass-through (no dimension config in controller tests)
         lenient().when(expectedRunsService.padToExpected(any(), any(), any(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -167,5 +172,170 @@ class RunQueryControllerTest {
                         .param("keys", "capital")
                         .header(TENANT_HEADER, "t1"))
                 .andExpect(status().isOk());
+    }
+
+    // ── Dimension-aware dedup tests ─────────────────────────────────────────────
+
+    @Test
+    void mergeEntries_regionCalculator_collapsesBatchAndIntraForSameRegion() throws Exception {
+        // capital is REGION-dimensioned; AMER/BATCH and AMER/INTRA must collapse to one AMER row
+        when(nameResolver.resolveAll(eq(List.of("capital"))))
+                .thenReturn(Map.of("capital", List.of("capitalcalcdev")));
+        when(nameResolver.dimensionOf("capital")).thenReturn(Dimension.REGION);
+
+        Instant earlier = Instant.parse("2026-03-31T08:00:00Z");
+        Instant later   = Instant.parse("2026-03-31T09:00:00Z");
+        var batch = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-batch").region("AMER").runType("BATCH").runNumber("2")
+                .status("SUCCESS").slaStatus("ON_TIME").startTime(earlier).isRerun(false).build();
+        var intra = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-intra").region("AMER").runType("INTRA").runNumber("2")
+                .status("SUCCESS").slaStatus("ON_TIME").startTime(later).isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("capitalcalcdev", null,
+                List.of(batch, intra));
+        when(calculatorStateService.getState(any(), any(), any(), eq(List.of("capitalcalcdev")), anyBoolean()))
+                .thenReturn(Map.of("capitalcalcdev", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-31")
+                        .param("frequency", "MONTHLY")
+                        .param("run_number", "2")
+                        .param("keys", "capital")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.capital.runs.length()").value(1))
+                .andExpect(jsonPath("$.calculators.capital.runs[0].region").value("AMER"))
+                .andExpect(jsonPath("$.calculators.capital.runs[0].runId").value("r-intra"))
+                .andExpect(jsonPath("$.calculators.capital.runs[0].isRerun").value(true))
+                .andExpect(jsonPath("$.calculators.capital.runs[0].runNumber").value("2"));
+    }
+
+    @Test
+    void mergeEntries_regionCalculator_differentRunNumbers_keepsBothRows() throws Exception {
+        when(nameResolver.resolveAll(eq(List.of("capital"))))
+                .thenReturn(Map.of("capital", List.of("capitalcalcdev")));
+        when(nameResolver.dimensionOf("capital")).thenReturn(Dimension.REGION);
+
+        var run1 = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r1").region("AMER").runType("BATCH").runNumber("1")
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var run2 = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r2").region("AMER").runType("BATCH").runNumber("2")
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("capitalcalcdev", null,
+                List.of(run1, run2));
+        when(calculatorStateService.getState(any(), any(), any(), eq(List.of("capitalcalcdev")), anyBoolean()))
+                .thenReturn(Map.of("capitalcalcdev", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-31")
+                        .param("keys", "capital")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.capital.runs.length()").value(2));
+    }
+
+    @Test
+    void mergeEntries_multiRealName_sameRegionAndRunNumber_collapsesToOne() throws Exception {
+        // Two real names both emitting AMER/run_number=2 → one row, isRerun=true
+        when(nameResolver.resolveAll(eq(List.of("capital"))))
+                .thenReturn(Map.of("capital", List.of("capitalcalcdev", "capitalcalcprod")));
+        when(nameResolver.dimensionOf("capital")).thenReturn(Dimension.REGION);
+
+        Instant t1 = Instant.parse("2026-03-31T07:00:00Z");
+        Instant t2 = Instant.parse("2026-03-31T08:00:00Z");
+        var entryA = new CalculatorBatchRunsResponse.CalculatorEntry("capitalcalcdev", null,
+                List.of(CalculatorBatchRunsResponse.RunEntry.builder()
+                        .runId("rA").region("AMER").runNumber("2")
+                        .status("SUCCESS").slaStatus("ON_TIME").startTime(t1).isRerun(false).build()));
+        var entryB = new CalculatorBatchRunsResponse.CalculatorEntry("capitalcalcprod", null,
+                List.of(CalculatorBatchRunsResponse.RunEntry.builder()
+                        .runId("rB").region("AMER").runNumber("2")
+                        .status("SUCCESS").slaStatus("ON_TIME").startTime(t2).isRerun(false).build()));
+        when(calculatorStateService.getState(any(), any(), any(),
+                eq(List.of("capitalcalcdev", "capitalcalcprod")), anyBoolean()))
+                .thenReturn(Map.of("capitalcalcdev", entryA, "capitalcalcprod", entryB));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-31")
+                        .param("run_number", "2")
+                        .param("keys", "capital")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.capital.runs.length()").value(1))
+                .andExpect(jsonPath("$.calculators.capital.runs[0].runId").value("rB"))
+                .andExpect(jsonPath("$.calculators.capital.runs[0].isRerun").value(true));
+    }
+
+    @Test
+    void mergeEntries_runTypeCalculator_keepsDistinctRunTypes() throws Exception {
+        when(nameResolver.resolveAll(eq(List.of("modelled-exposure"))))
+                .thenReturn(Map.of("modelled-exposure", List.of("modelledexposurecalc")));
+        when(nameResolver.dimensionOf("modelled-exposure")).thenReturn(Dimension.RUN_TYPE);
+
+        var etd = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-etd").runType("ETD").runNumber("1")
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var otc = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-otc").runType("OTC").runNumber("1")
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("modelledexposurecalc", null,
+                List.of(etd, otc));
+        when(calculatorStateService.getState(any(), any(), any(), eq(List.of("modelledexposurecalc")), anyBoolean()))
+                .thenReturn(Map.of("modelledexposurecalc", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-06")
+                        .param("keys", "modelled-exposure")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.modelled-exposure.runs.length()").value(2));
+    }
+
+    @Test
+    void mergeEntries_startedRunBeatsNotStartedInSameBucket() throws Exception {
+        when(nameResolver.resolveAll(eq(List.of("capital"))))
+                .thenReturn(Map.of("capital", List.of("capitalcalcdev")));
+        when(nameResolver.dimensionOf("capital")).thenReturn(Dimension.REGION);
+
+        var notStarted = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId(null).region("EMEA").runNumber("1")
+                .status("NOT_STARTED").slaStatus("ON_TIME").isRerun(false).build();
+        var running = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-emea").region("EMEA").runNumber("1")
+                .status("RUNNING").slaStatus("ON_TIME").startTime(Instant.parse("2026-03-06T06:00:00Z"))
+                .isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("capitalcalcdev", null,
+                List.of(notStarted, running));
+        when(calculatorStateService.getState(any(), any(), any(), eq(List.of("capitalcalcdev")), anyBoolean()))
+                .thenReturn(Map.of("capitalcalcdev", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-06")
+                        .param("run_number", "1")
+                        .param("keys", "capital")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.capital.runs.length()").value(1))
+                .andExpect(jsonPath("$.calculators.capital.runs[0].status").value("RUNNING"))
+                .andExpect(jsonPath("$.calculators.capital.runs[0].runId").value("r-emea"));
+    }
+
+    @Test
+    void batchRuns_runEntryCarriesRunNumber() throws Exception {
+        var runEntry = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-1").region("AMER").runNumber("2")
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("capital", null, List.of(runEntry));
+        when(calculatorStateService.getState(any(), any(), eq("2"), eq(List.of("capital")), anyBoolean()))
+                .thenReturn(Map.of("capital", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-06")
+                        .param("run_number", "2")
+                        .param("keys", "capital")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.capital.runs[0].runNumber").value("2"));
     }
 }

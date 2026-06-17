@@ -1,5 +1,6 @@
 package com.company.observability.controller;
 
+import com.company.observability.domain.enums.Dimension;
 import com.company.observability.domain.enums.Frequency;
 import com.company.observability.dto.response.CalculatorBatchRunsResponse;
 import com.company.observability.service.ExpectedRunsService;
@@ -24,6 +25,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @RestController
@@ -142,12 +144,7 @@ public class RunQueryController {
         if (parts.isEmpty()) {
             return new CalculatorBatchRunsResponse.CalculatorEntry(alias, null, List.of());
         }
-        if (parts.size() == 1) {
-            CalculatorBatchRunsResponse.CalculatorEntry single = parts.get(0);
-            return new CalculatorBatchRunsResponse.CalculatorEntry(alias, single.calculatorId(), single.runs());
-        }
 
-        // Multi: merge runs; calculatorId only when all real calculators agree (unusual)
         Set<String> ids = parts.stream()
                 .map(CalculatorBatchRunsResponse.CalculatorEntry::calculatorId)
                 .filter(Objects::nonNull)
@@ -158,6 +155,38 @@ public class RunQueryController {
                 .flatMap(e -> e.runs().stream())
                 .toList();
 
-        return new CalculatorBatchRunsResponse.CalculatorEntry(alias, mergedId, allRuns);
+        // Collapse runs that represent the same logical dimension slot (e.g. AMER BATCH + AMER INTRA
+        // on a region-dimensioned calculator). Key by the primary dimension + runNumber so distinct
+        // cycles (run_number=1 vs run_number=2) and distinct dimension values stay separate.
+        Dimension dim = nameResolver.dimensionOf(alias);
+        Function<CalculatorBatchRunsResponse.RunEntry, String> keyFn = r -> switch (dim) {
+            case REGION   -> Objects.toString(r.region(),   "") + "|" + Objects.toString(r.runNumber(), "");
+            case RUN_TYPE -> Objects.toString(r.runType(),  "") + "|" + Objects.toString(r.runNumber(), "");
+            case NONE     -> Objects.toString(r.region(),   "") + "|" + Objects.toString(r.runType(), "")
+                                                                + "|" + Objects.toString(r.runNumber(), "");
+        };
+
+        List<CalculatorBatchRunsResponse.RunEntry> deduped = allRuns.stream()
+                .collect(Collectors.groupingBy(keyFn, LinkedHashMap::new, Collectors.toList()))
+                .values().stream()
+                .map(bucket -> {
+                    CalculatorBatchRunsResponse.RunEntry latest = bucket.stream()
+                            .max(Comparator
+                                    .comparing((CalculatorBatchRunsResponse.RunEntry r) ->
+                                            !"NOT_STARTED".equals(r.status()))
+                                    .thenComparing(r -> r.startTime(),
+                                            Comparator.nullsFirst(Comparator.naturalOrder()))
+                                    .thenComparing(r -> r.endTime(),
+                                            Comparator.nullsFirst(Comparator.naturalOrder())))
+                            .orElseThrow();
+                    long realAttempts = bucket.stream()
+                            .filter(r -> !"NOT_STARTED".equals(r.status())).count();
+                    boolean rerun = realAttempts > 1 || bucket.stream().anyMatch(
+                            CalculatorBatchRunsResponse.RunEntry::isRerun);
+                    return latest.toBuilder().isRerun(rerun).build();
+                })
+                .toList();
+
+        return new CalculatorBatchRunsResponse.CalculatorEntry(alias, mergedId, deduped);
     }
 }

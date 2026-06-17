@@ -1,6 +1,8 @@
 package com.company.observability.service;
 
 import com.company.observability.config.CalculatorProperties;
+import com.company.observability.domain.enums.Dimension;
+
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -53,5 +55,15 @@ public class CalculatorNameResolver {
      */
     public boolean isMultiAlias(String nameOrAlias) {
         return resolve(nameOrAlias).size() > 1;
+    }
+
+    /**
+     * Returns the primary dimension used to distinguish runs for this alias.
+     * REGION for region-configured calculators, RUN_TYPE for type-configured, NONE otherwise.
+     */
+    public Dimension dimensionOf(String nameOrAlias) {
+        if (calculatorProperties.getRegions().containsKey(nameOrAlias))  return Dimension.REGION;
+        if (calculatorProperties.getRunTypes().containsKey(nameOrAlias)) return Dimension.RUN_TYPE;
+        return Dimension.NONE;
     }
 }

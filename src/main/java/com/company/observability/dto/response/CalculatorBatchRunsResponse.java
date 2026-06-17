@@ -30,6 +30,7 @@ public record CalculatorBatchRunsResponse(
             String runId,
             String region,
             String runType,
+            String runNumber,
             String status,
             String slaStatus,
             Boolean slaBreached,
