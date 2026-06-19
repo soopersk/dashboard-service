@@ -509,6 +509,32 @@ class CalculatorStateServiceTest {
                         estStart, java.time.LocalTime.of(2, 0), java.time.ZoneOffset.UTC));
     }
 
+    // ── runNumber stamped on NOT_STARTED projection ─────────────────────────
+
+    /**
+     * When a run_number is requested and the calculator has no runs for that date,
+     * the synthetic NOT_STARTED entry must carry the requested run_number so the
+     * strict-filter in mergeEntries keeps it rather than dropping it as a null.
+     */
+    @Test
+    void notStartedEntry_stampedWithRequestedRunNumber() {
+        CalculatorProfile profile = new CalculatorProfile("calc", "DAILY", null, null, 3_600_000L, 480, 540, 10);
+        when(profileService.getProfile(eq("calc"), eq(FREQ), eq("1"))).thenReturn(profile);
+
+        CalculatorRun latest = new CalculatorRun();
+        latest.setCalculatorName("calc");
+        when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), eq("1"), any()))
+                .thenReturn(List.of());
+        when(runRepository.findLatestRunEstimatesByName(eq("calc"), eq(FREQ), eq("1"), anyInt()))
+                .thenReturn(Optional.of(latest));
+
+        var entries = service.getState(DATE, FREQ, "1", List.of("calc"), false).get("calc").runs();
+
+        assertThat(entries).hasSize(1);
+        assertThat(entries.get(0).status()).isEqualTo("NOT_STARTED");
+        assertThat(entries.get(0).runNumber()).isEqualTo("1");
+    }
+
     // ── nocache bypass ──────────────────────────────────────────────────────
 
     @Test

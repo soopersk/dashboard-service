@@ -315,16 +315,16 @@ public class RunIngestionService {
      * senders) but flagged — {@code parseRunNumber} silently treats them as T+2.
      */
     private String normalizeRunNumber(String runNumber) {
-        if (runNumber == null || runNumber.isBlank()) {
-            return null;
+        String normalized = RunNumbers.normalize(runNumber);
+        if (normalized != null) {
+            try {
+                Integer.parseInt(normalized);
+            } catch (NumberFormatException e) {
+                log.warn("event=run.start.run_number outcome=accepted_with_warning reason=non_numeric runNumber={}", runNumber);
+                meterRegistry.counter("obs.ingestion.run_number.non_numeric").increment();
+            }
         }
-        try {
-            return Integer.toString(Integer.parseInt(runNumber.trim()));
-        } catch (NumberFormatException e) {
-            log.warn("event=run.start.run_number outcome=accepted_with_warning reason=non_numeric runNumber={}", runNumber);
-            meterRegistry.counter("obs.ingestion.run_number.non_numeric").increment();
-            return runNumber;
-        }
+        return normalized;
     }
 
     /**

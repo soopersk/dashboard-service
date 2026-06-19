@@ -66,4 +66,14 @@ public class CalculatorNameResolver {
         if (calculatorProperties.getRunTypes().containsKey(nameOrAlias)) return Dimension.RUN_TYPE;
         return Dimension.NONE;
     }
+
+    /**
+     * Returns true when the alias is declared in {@code run-number-aware}, meaning Airflow sends
+     * a numbered cycle ({@code run_number=1}, {@code run_number=2}, …) and null-{@code run_number}
+     * rows should be suppressed for strict cycle-scoped queries. {@code nameOrAlias} is matched as
+     * an <b>alias</b> (the env-invariant key), not a real {@code calculator_name}.
+     */
+    public boolean isRunNumberAware(String nameOrAlias) {
+        return calculatorProperties.getRunNumberAware().contains(nameOrAlias);
+    }
 }

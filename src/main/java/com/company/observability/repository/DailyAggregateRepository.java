@@ -360,7 +360,7 @@ public class DailyAggregateRepository {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("calculatorName", calculatorName)
                 .addValue("frequency", frequency)
-                .addValue("runNumber", runNumber)
+                .addValue("runNumber", runNumber, Types.VARCHAR)
                 .addValue("dimensionValue", dimensionValue)
                 .addValue("days", days);
 

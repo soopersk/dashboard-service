@@ -1,7 +1,7 @@
 package com.company.observability.service;
 
 import com.company.observability.config.CalculatorProperties;
-import com.company.observability.service.CalculatorNameResolver.Dimension;
+import com.company.observability.domain.enums.Dimension;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -21,12 +21,13 @@ class CalculatorNameResolverTest {
                 "capital", List.of("capitalcalc", "capitalcalcmedium"),
                 "portfolio", List.of("portfoliocalc")
         ));
-         props.setRegions(Map.of(
+        props.setRegions(Map.of(
                 "capital", List.of("AMER", "EMEA", "APAC")
         ));
         props.setRunTypes(Map.of(
                 "modelled-exposure", List.of("ETD", "OTC", "SFT")
         ));
+        props.setRunNumberAware(List.of("capital"));
         resolver = new CalculatorNameResolver(props);
     }
 
@@ -111,5 +112,24 @@ class CalculatorNameResolverTest {
     void dimensionOf_unknownAlias_returnsNone() {
         assertThat(resolver.dimensionOf("portfolio")).isEqualTo(Dimension.NONE);
         assertThat(resolver.dimensionOf("someothercalc")).isEqualTo(Dimension.NONE);
+    }
+
+    @Test
+    void isRunNumberAware_declaredCalc_true() {
+        assertThat(resolver.isRunNumberAware("capital")).isTrue();
+    }
+
+    @Test
+    void isRunNumberAware_undeclaredCalc_false() {
+        assertThat(resolver.isRunNumberAware("modelled-exposure")).isFalse();
+        assertThat(resolver.isRunNumberAware("portfolio")).isFalse();
+        assertThat(resolver.isRunNumberAware("unknown")).isFalse();
+    }
+
+    @Test
+    void isRunNumberAware_realNameOfAwareAlias_false() {
+        // "capital" is the aware alias; its real names must NOT match (alias-keyed lookup).
+        assertThat(resolver.isRunNumberAware("capitalcalc")).isFalse();
+        assertThat(resolver.isRunNumberAware("capitalcalcmedium")).isFalse();
     }
 }

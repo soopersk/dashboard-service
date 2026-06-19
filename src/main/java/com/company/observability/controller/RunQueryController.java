@@ -7,6 +7,7 @@ import com.company.observability.service.ExpectedRunsService;
 import com.company.observability.service.CalculatorNameResolver;
 import com.company.observability.service.CalculatorStateService;
 import com.company.observability.util.ObservabilityConstants;
+import com.company.observability.util.RunNumbers;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.swagger.v3.oas.annotations.Operation;
@@ -49,8 +50,10 @@ public class RunQueryController {
                     "unique-per-tenant); upstream UUIDs are not accepted on this endpoint. " +
                     "Regional calculators return one RunEntry per region; typed calculators return one per runType. " +
                     "Without `run_number`, multi-cycle calculators return one RunEntry per run number per dimension. " +
-                    "With `run_number`, rows with a NULL run_number (un-numbered single-bucket runs) are included " +
-                    "alongside the requested bucket; an unknown run_number returns an empty runs list. " +
+                    "With `run_number` on a run-number-aware calculator (e.g. capital), null-run_number rows are " +
+                    "suppressed strictly — only the requested cycle is returned; NOT_STARTED projections and " +
+                    "dimension placeholders are stamped with the requested run_number. " +
+                    "With `run_number` on an agnostic calculator, run_number is effectively ignored. " +
                     "Empty runs list = no run found. isRerun=true = a same-run_number re-trigger was fired for that dimension."
     )
     public ResponseEntity<CalculatorBatchRunsResponse> getBatchRuns(
@@ -74,7 +77,7 @@ public class RunQueryController {
         Frequency freq = Frequency.fromStrict(frequency);
 
         // Normalize blank → null once so getState and padToExpected see the same value.
-        runNumber = (runNumber == null || runNumber.isBlank()) ? null : runNumber;
+        runNumber = RunNumbers.normalize(runNumber);
 
         // Expand aliases → {alias: [realName, ...]}; unknown names pass through unchanged
         Map<String, List<String>> aliasToRealNames = nameResolver.resolveAll(aliases);
@@ -93,10 +96,11 @@ public class RunQueryController {
                     calculatorStateService.getState(reportingDate, freq, runNumber, allRealNames, nocache);
 
             // Re-group by alias: merge entries from all real names under each alias key
+            final String finalRunNumber = runNumber;
             Map<String, CalculatorBatchRunsResponse.CalculatorEntry> calculators =
                     aliasToRealNames.entrySet().stream().collect(Collectors.toMap(
                             Map.Entry::getKey,
-                            e -> mergeEntries(e.getKey(), e.getValue(), byRealName),
+                            e -> mergeEntries(e.getKey(), e.getValue(), byRealName, finalRunNumber),
                             (a, b) -> a,
                             LinkedHashMap::new
                     ));
@@ -134,7 +138,8 @@ public class RunQueryController {
     private CalculatorBatchRunsResponse.CalculatorEntry mergeEntries(
             String alias,
             List<String> realNames,
-            Map<String, CalculatorBatchRunsResponse.CalculatorEntry> byRealName) {
+            Map<String, CalculatorBatchRunsResponse.CalculatorEntry> byRealName,
+            String runNumber) {
 
         List<CalculatorBatchRunsResponse.CalculatorEntry> parts = realNames.stream()
                 .map(byRealName::get)
@@ -155,6 +160,44 @@ public class RunQueryController {
                 .flatMap(e -> e.runs().stream())
                 .toList();
 
+        // For run-number-aware calculators queried with an explicit run_number, suppress any
+        // null-run_number rows — projections already carry the requested cycle, so only
+        // anomalous un-numbered real rows remain after stamping; drop them strictly.
+        // For all other cases use the seahorse data-driven fold: drop a null only when a
+        // numbered sibling for the same dimension already exists.
+        boolean strict = nameResolver.isRunNumberAware(alias) && runNumber != null;
+        List<CalculatorBatchRunsResponse.RunEntry> candidates;
+        if (strict) {
+            candidates = allRuns.stream()
+                    .filter(r -> r.runNumber() != null)
+                    .toList();
+        } else {
+            // Seahorse fold: collect dim values that have at least one numbered run, then drop
+            // null-run_number rows only for those dims.
+            Dimension dimForFold = nameResolver.dimensionOf(alias);
+            Set<String> numberedDims = allRuns.stream()
+                    .filter(r -> r.runNumber() != null)
+                    .map(r -> switch (dimForFold) {
+                        case REGION   -> Objects.toString(r.region(), "");
+                        case RUN_TYPE -> Objects.toString(r.runType(), "");
+                        case NONE     -> Objects.toString(r.region(), "") + "|"
+                                       + Objects.toString(r.runType(), "");
+                    })
+                    .collect(Collectors.toSet());
+            candidates = allRuns.stream()
+                    .filter(r -> {
+                        if (r.runNumber() != null) return true;
+                        String dim = switch (dimForFold) {
+                            case REGION   -> Objects.toString(r.region(), "");
+                            case RUN_TYPE -> Objects.toString(r.runType(), "");
+                            case NONE     -> Objects.toString(r.region(), "") + "|"
+                                           + Objects.toString(r.runType(), "");
+                        };
+                        return !numberedDims.contains(dim);
+                    })
+                    .toList();
+        }
+
         // Collapse runs that represent the same logical dimension slot (e.g. AMER BATCH + AMER INTRA
         // on a region-dimensioned calculator). Key by the primary dimension + runNumber so distinct
         // cycles (run_number=1 vs run_number=2) and distinct dimension values stay separate.
@@ -166,7 +209,7 @@ public class RunQueryController {
                                                                 + "|" + Objects.toString(r.runNumber(), "");
         };
 
-        List<CalculatorBatchRunsResponse.RunEntry> deduped = allRuns.stream()
+        List<CalculatorBatchRunsResponse.RunEntry> deduped = candidates.stream()
                 .collect(Collectors.groupingBy(keyFn, LinkedHashMap::new, Collectors.toList()))
                 .values().stream()
                 .map(bucket -> {

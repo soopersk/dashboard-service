@@ -192,6 +192,46 @@ class AnalyticsServiceTest {
         verify(cacheService).putInCache(eq("executions"), eq("portfolio"), any(), anyInt(), any(), any(LocalDate.class), any());
     }
 
+    // ── runNumber-aware strict suppression ──────────────────────────────────
+
+    @Test
+    void getRunExecutionsByName_awarecalc_withRunNumber_excludesNullRunNumberRows() {
+        CalculatorProperties props = new CalculatorProperties();
+        props.setRunNumberAware(java.util.List.of("capital"));
+        AnalyticsService awareService = new AnalyticsService(
+                calculatorRunRepository,
+                cacheService,
+                calculatorProfileService,
+                new com.company.observability.config.SlaProperties(),
+                new CalculatorNameResolver(props)
+        );
+
+        LocalDate day = LocalDate.of(2026, 6, 1);
+        Instant start = Instant.parse("2026-06-01T05:00:00Z");
+        Instant end   = Instant.parse("2026-06-01T06:00:00Z");
+
+        RunWithSlaStatus run1 = new RunWithSlaStatus(
+                "run-numbered", "calc-1", "capital", day,
+                start, end, 3_600_000L, null, start,
+                Frequency.DAILY, RunStatus.SUCCESS, null, null, null, "1", null);
+        RunWithSlaStatus runNull = new RunWithSlaStatus(
+                "run-null-rn", "calc-1", "capital", day,
+                start, end, 3_600_000L, null, start,
+                Frequency.DAILY, RunStatus.SUCCESS, null, null, null, null, null);
+
+        when(cacheService.getFromCache(any(), eq("capital"), any(), anyInt(), eq("1"), any(), any()))
+                .thenReturn(null);
+        when(calculatorRunRepository.findRunsByName(eq("capital"), any(), anyInt(), eq("1"), any(LocalDate.class)))
+                .thenReturn(java.util.List.of(run1, runNull));
+        when(calculatorProfileService.getProfile(any(), any()))
+                .thenReturn(new com.company.observability.domain.CalculatorProfile("capital", "DAILY", null, null, 0, 0, 0, 0));
+
+        RunPerformanceData result = awareService.getRunExecutionsByName("capital", 30, Frequency.DAILY, "1", LocalDate.now(), false);
+
+        assertEquals(1, result.runs().size());
+        assertEquals("run-numbered", result.runs().get(0).runId());
+    }
+
     // ── nocache bypass ──────────────────────────────────────────────────────
 
     @Test

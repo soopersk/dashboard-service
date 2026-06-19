@@ -10,6 +10,7 @@ import com.company.observability.domain.enums.SlaBand;
 import com.company.observability.dto.response.CalculatorBatchRunsResponse.CalculatorEntry;
 import com.company.observability.dto.response.CalculatorBatchRunsResponse.RunEntry;
 import com.company.observability.repository.CalculatorRunRepository;
+import com.company.observability.util.RunNumbers;
 import com.company.observability.util.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -50,7 +51,7 @@ public class CalculatorStateService {
             boolean nocache) {
 
         // Normalize blank → null so empty ?run_number= means "all runs" (not filter on empty string)
-        String rn = (runNumber == null || runNumber.isBlank()) ? null : runNumber;
+        String rn = RunNumbers.normalize(runNumber);
         String freqName = frequency.name();
 
         // 1. Cache read — partial hits are fine; skipped when nocache=true (forces full DB fetch)
@@ -220,7 +221,7 @@ public class CalculatorStateService {
             return new CalculatorEntry(name, null, List.of());
         }
 
-        return entryWithSyntheticRun(name, calculatorId, estStart, estEnd, expectedMs, projectedSla);
+        return entryWithSyntheticRun(name, calculatorId, estStart, estEnd, expectedMs, projectedSla, runNumber);
     }
 
     /**
@@ -271,7 +272,8 @@ public class CalculatorStateService {
 
     private CalculatorEntry entryWithSyntheticRun(String name, String calculatorId,
                                                    Instant estStart, Instant estEnd,
-                                                   Long expectedMs, Instant projectedSla) {
+                                                   Long expectedMs, Instant projectedSla,
+                                                   String runNumber) {
         ExpectedRunsService.SlaEval sla =
                 ExpectedRunsService.evaluateSlaStatus(projectedSla, slaProperties.bandGapMs(), clock.instant());
         log.debug("event=batch_runs.not_started.sla_eval calculator={} projectedSla={} slaStatus={} slaBreached={}",
@@ -284,6 +286,7 @@ public class CalculatorStateService {
                 .estimatedEndTime(estEnd)
                 .expectedDurationMs(expectedMs)
                 .sla(projectedSla)
+                .runNumber(runNumber)
                 .isRerun(false)
                 .build();
         return new CalculatorEntry(name, calculatorId, List.of(synthetic));

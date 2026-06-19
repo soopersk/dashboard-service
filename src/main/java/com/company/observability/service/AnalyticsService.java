@@ -9,6 +9,7 @@ import com.company.observability.domain.enums.RunStatus;
 import com.company.observability.domain.enums.SlaBand;
 import com.company.observability.dto.response.*;
 import com.company.observability.repository.CalculatorRunRepository;
+import com.company.observability.util.RunNumbers;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -42,7 +43,7 @@ public class AnalyticsService {
             LocalDate asOfDate, boolean nocache) {
 
         // Normalize blank → null so empty ?run_number= means "all runs" (not filter on empty string)
-        String rn = (runNumber == null || runNumber.isBlank()) ? null : runNumber;
+        String rn = RunNumbers.normalize(runNumber);
 
         if (nocache) {
             log.debug("event=analytics.cache.bypass calculatorName={} frequency={} days={}",
@@ -69,6 +70,12 @@ public class AnalyticsService {
                 .sorted(Comparator.comparing(RunWithSlaStatus::reportingDate)
                         .thenComparing(RunWithSlaStatus::startTime, Comparator.nullsFirst(Comparator.naturalOrder())))
                 .toList();
+
+        // For run-number-aware calculators, drop un-numbered rows when a specific cycle is requested
+        // so stray null-run_number records don't pollute the cycle-scoped history.
+        if (nameResolver.isRunNumberAware(calculatorName) && rn != null) {
+            rawRuns = rawRuns.stream().filter(r -> r.runNumber() != null).toList();
+        }
 
         RunPerformanceData response = buildExecutionsResponse(calculatorName, rawRuns, days, frequency);
         cacheService.putInCache(CACHE_EXECUTIONS, calculatorName, frequency.name(), days, rn, asOfDate, response);

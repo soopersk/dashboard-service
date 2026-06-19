@@ -195,6 +195,7 @@ public class ExpectedRunsService {
                 .sla(calculatorDeadline)
                 .region(isRegion ? dimValue : null)
                 .runType(isRegion ? null : dimValue)
+                .runNumber(runNumber)
                 .isRerun(false)
                 .build();
     }

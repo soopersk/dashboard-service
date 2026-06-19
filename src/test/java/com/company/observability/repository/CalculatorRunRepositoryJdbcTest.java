@@ -106,6 +106,33 @@ class CalculatorRunRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
     }
 
     // ---------------------------------------------------------------
+    // upsert — null run_number must not throw (pins the Types.VARCHAR fix)
+    // ---------------------------------------------------------------
+
+    @Test
+    void upsert_nullRunNumber_succeeds() {
+        LocalDate date = LocalDate.of(2026, 5, 20);
+        Instant start = Instant.parse("2026-05-20T05:00:00Z");
+
+        CalculatorRun run = CalculatorRun.builder()
+                .runId("run-null-rn")
+                .calculatorId("calc-agnostic")
+                .calculatorName("modelled-exposure")
+                .tenantId("t1")
+                .frequency(com.company.observability.domain.enums.Frequency.DAILY)
+                .reportingDate(date)
+                .startTime(start)
+                .status(RunStatus.RUNNING)
+                .createdAt(start)
+                .build();  // runNumber is null — would crash before the Types.VARCHAR fix
+
+        CalculatorRun saved = repository.upsert(run);
+
+        assertThat(saved.getRunId()).isEqualTo("run-null-rn");
+        assertThat(saved.getRunNumber()).isNull();
+    }
+
+    // ---------------------------------------------------------------
     // upsert — immutable-column protection
     // ---------------------------------------------------------------
 

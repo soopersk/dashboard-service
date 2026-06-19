@@ -120,7 +120,7 @@ public class CalculatorRunRepository {
                 .addValue("slaBand", run.getSlaBand() != null ? run.getSlaBand().name() : null)
                 .addValue("slaBreached", run.isSlaBreached())
                 .addValue("slaBreachReason", run.getSlaBreachReason())
-                .addValue("runNumber", run.getRunNumber())
+                .addValue("runNumber", run.getRunNumber(), Types.VARCHAR)
                 .addValue("runType", run.getRunType())
                 .addValue("region", run.getRegion())
                 .addValue("correlationId", run.getCorrelationId())

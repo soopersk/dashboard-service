@@ -7,7 +7,6 @@ import com.company.observability.dto.response.CalculatorBatchRunsResponse;
 import com.company.observability.service.ExpectedRunsService;
 import com.company.observability.service.CalculatorNameResolver;
 import com.company.observability.service.CalculatorStateService;
-import com.company.observability.service.CalculatorNameResolver.Dimension;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -54,18 +53,24 @@ class RunQueryControllerTest {
 
     @BeforeEach
     void configurePassthroughResolver() {
-        // Default: each alias resolves to itself (no alias config in controller tests)
-        lenient().when(nameResolver.resolveAll(any())).thenAnswer(inv -> {
+        // Default: each alias resolves to itself (no alias config in controller tests).
+        // Uses doAnswer form to avoid the stub firing when Mockito calls resolveAll(null)
+        // during when().thenReturn() stub registration (which would NPE on null iteration).
+        lenient().doAnswer(inv -> {
             List<String> aliases = inv.getArgument(0);
+            // Guard: Mockito calls resolveAll(null) when registering when().thenReturn() stubs
+            if (aliases == null) return new LinkedHashMap<>();
             Map<String, List<String>> result = new LinkedHashMap<>();
             for (String a : aliases) result.put(a, List.of(a));
             return result;
-        });
+        }).when(nameResolver).resolveAll(any());
         // Default: NONE dimension so mergeEntries uses the combined key (safe for all existing tests)
         lenient().when(nameResolver.dimensionOf(any())).thenReturn(Dimension.NONE);
+        // Default: not run-number-aware (non-strict path)
+        lenient().when(nameResolver.isRunNumberAware(any())).thenReturn(false);
         // Default: padToExpected is a no-op pass-through (no dimension config in controller tests)
-        lenient().when(expectedRunsService.padToExpected(any(), any(), any(), any()))
-                .thenAnswer(inv -> inv.getArgument(0));
+        lenient().doAnswer(inv -> inv.getArgument(0))
+                .when(expectedRunsService).padToExpected(any(), any(), any(), any());
     }
 
     @Test
@@ -319,6 +324,98 @@ class RunQueryControllerTest {
                 .andExpect(jsonPath("$.calculators.capital.runs.length()").value(1))
                 .andExpect(jsonPath("$.calculators.capital.runs[0].status").value("RUNNING"))
                 .andExpect(jsonPath("$.calculators.capital.runs[0].runId").value("r-emea"));
+    }
+
+    // ── runNumber-aware strict suppression tests ────────────────────────────
+
+    @Test
+    void strictMode_awarecalc_nullRunNumberRowDropped_numberedRowKept() throws Exception {
+        // AMER has both a numbered (run_number=1) and a null-run_number real row;
+        // strict mode should keep only the numbered one.
+        when(nameResolver.resolveAll(eq(List.of("capital"))))
+                .thenReturn(Map.of("capital", List.of("capitalcalcdev")));
+        when(nameResolver.dimensionOf("capital")).thenReturn(Dimension.REGION);
+        when(nameResolver.isRunNumberAware("capital")).thenReturn(true);
+
+        var numbered = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-numbered").region("AMER").runNumber("1")
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var nullRn = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-null").region("AMER").runNumber(null)
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("capitalcalcdev", null,
+                List.of(numbered, nullRn));
+        when(calculatorStateService.getState(any(), any(), eq("1"), eq(List.of("capitalcalcdev")), anyBoolean()))
+                .thenReturn(Map.of("capitalcalcdev", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-06")
+                        .param("run_number", "1")
+                        .param("keys", "capital")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.capital.runs.length()").value(1))
+                .andExpect(jsonPath("$.calculators.capital.runs[0].runId").value("r-numbered"))
+                .andExpect(jsonPath("$.calculators.capital.runs[0].runNumber").value("1"));
+    }
+
+    @Test
+    void strictMode_awarecalc_distinctCycles_bothKept() throws Exception {
+        // run_number=1 and run_number=2 for AMER are distinct cycles — both must survive strict mode
+        // (strict only drops null-run_number, not other numbers)
+        when(nameResolver.resolveAll(eq(List.of("capital"))))
+                .thenReturn(Map.of("capital", List.of("capitalcalcdev")));
+        when(nameResolver.dimensionOf("capital")).thenReturn(Dimension.REGION);
+        when(nameResolver.isRunNumberAware("capital")).thenReturn(true);
+
+        var run1 = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r1").region("AMER").runNumber("1")
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var run2 = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r2").region("AMER").runNumber("2")
+                .status("RUNNING").slaStatus("ON_TIME").isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("capitalcalcdev", null,
+                List.of(run1, run2));
+        when(calculatorStateService.getState(any(), any(), eq("1"), eq(List.of("capitalcalcdev")), anyBoolean()))
+                .thenReturn(Map.of("capitalcalcdev", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-06")
+                        .param("run_number", "1")
+                        .param("keys", "capital")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.capital.runs.length()").value(2));
+    }
+
+    @Test
+    void strictMode_agnosticCalc_nullRunNumberRowKept() throws Exception {
+        // modelled-exposure is NOT run-number-aware → null rows must NOT be dropped
+        when(nameResolver.resolveAll(eq(List.of("modelled-exposure"))))
+                .thenReturn(Map.of("modelled-exposure", List.of("modelledexposurecalc")));
+        when(nameResolver.dimensionOf("modelled-exposure")).thenReturn(Dimension.RUN_TYPE);
+        when(nameResolver.isRunNumberAware("modelled-exposure")).thenReturn(false);
+
+        var etd = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-etd").runType("ETD").runNumber(null)
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var otc = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-otc").runType("OTC").runNumber(null)
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var sft = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-sft").runType("SFT").runNumber(null)
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("modelledexposurecalc", null,
+                List.of(etd, otc, sft));
+        when(calculatorStateService.getState(any(), any(), isNull(), eq(List.of("modelledexposurecalc")), anyBoolean()))
+                .thenReturn(Map.of("modelledexposurecalc", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-06")
+                        .param("keys", "modelled-exposure")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.modelled-exposure.runs.length()").value(3));
     }
 
     @Test
