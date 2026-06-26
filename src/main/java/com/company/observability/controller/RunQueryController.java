@@ -166,6 +166,7 @@ public class RunQueryController {
         // For all other cases use the seahorse data-driven fold: drop a null only when a
         // numbered sibling for the same dimension already exists.
         boolean strict = nameResolver.isRunNumberAware(alias) && runNumber != null;
+        Dimension dim = nameResolver.dimensionOf(alias);
         List<CalculatorBatchRunsResponse.RunEntry> candidates;
         if (strict) {
             candidates = allRuns.stream()
@@ -174,29 +175,22 @@ public class RunQueryController {
         } else {
             // Seahorse fold: collect dim values that have at least one numbered run, then drop
             // null-run_number rows only for those dims. A dimensionless (NONE) calculator is a single
-            // logical slot keyed only by run_number, so foldKey folds all its rows under one constant
-            // key — a null is then dropped whenever any numbered cycle exists, regardless of any
-            // incidental region/run_type difference between the numbered and the legacy null row.
-            Dimension dimForFold = nameResolver.dimensionOf(alias);
+            // logical slot keyed only by run_number, so dimensionKey folds all its rows under one
+            // constant key — a null is then dropped whenever any numbered cycle exists, regardless of
+            // any incidental region/run_type difference between the numbered and the legacy null row.
             Set<String> numberedDims = allRuns.stream()
                     .filter(r -> r.runNumber() != null)
-                    .map(r -> foldKey(r, dimForFold))
+                    .map(r -> dimensionKey(r, dim))
                     .collect(Collectors.toSet());
             candidates = allRuns.stream()
-                    .filter(r -> r.runNumber() != null || !numberedDims.contains(foldKey(r, dimForFold)))
+                    .filter(r -> r.runNumber() != null || !numberedDims.contains(dimensionKey(r, dim)))
                     .toList();
         }
 
-        // Collapse runs that represent the same logical dimension slot (e.g. AMER BATCH + AMER INTRA
-        // on a region-dimensioned calculator). Key by the primary dimension + runNumber so distinct
-        // cycles (run_number=1 vs run_number=2) and distinct dimension values stay separate.
-        Dimension dim = nameResolver.dimensionOf(alias);
-        Function<CalculatorBatchRunsResponse.RunEntry, String> keyFn = r -> switch (dim) {
-            case REGION   -> Objects.toString(r.region(),   "") + "|" + Objects.toString(r.runNumber(), "");
-            case RUN_TYPE -> Objects.toString(r.runType(),  "") + "|" + Objects.toString(r.runNumber(), "");
-            case NONE     -> Objects.toString(r.region(),   "") + "|" + Objects.toString(r.runType(), "")
-                                                                + "|" + Objects.toString(r.runNumber(), "");
-        };
+        // A logical run = its dimension slot + its cycle (run_number). For NONE, dimensionKey is ""
+        // so runs collapse on run_number alone — incidental region/run_type never split a slot.
+        Function<CalculatorBatchRunsResponse.RunEntry, String> keyFn =
+                r -> dimensionKey(r, dim) + "|" + Objects.toString(r.runNumber(), "");
 
         List<CalculatorBatchRunsResponse.RunEntry> deduped = candidates.stream()
                 .collect(Collectors.groupingBy(keyFn, LinkedHashMap::new, Collectors.toList()))
@@ -223,16 +217,16 @@ public class RunQueryController {
     }
 
     /**
-     * Dimension-fold key used by the seahorse null-run_number suppression. REGION/RUN_TYPE
-     * calculators key on their dimension value; a dimensionless (NONE) calculator collapses to a
-     * single logical slot (constant key) — its runs are distinguished only by run_number, so any
-     * incidental region/run_type must not split the fold.
+     * Single source of truth for a run's dimension slot, shared by null-run_number suppression and
+     * dedup. REGION/RUN_TYPE calculators key on their dimension value; a dimensionless (NONE)
+     * calculator collapses to a single logical slot (constant "" key) — its runs are distinguished
+     * only by run_number, so any incidental region/run_type must not split the slot.
      */
-    private static String foldKey(CalculatorBatchRunsResponse.RunEntry r, Dimension dim) {
+    private static String dimensionKey(CalculatorBatchRunsResponse.RunEntry r, Dimension dim) {
         return switch (dim) {
             case REGION   -> Objects.toString(r.region(), "");
             case RUN_TYPE -> Objects.toString(r.runType(), "");
-            case NONE     -> "";
+            case NONE     -> "";   // dimensionless → one slot, distinguished only by run_number
         };
     }
 }

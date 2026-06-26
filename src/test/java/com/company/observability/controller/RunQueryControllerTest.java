@@ -474,6 +474,38 @@ class RunQueryControllerTest {
     }
 
     @Test
+    void seahorseFold_dimensionlessCalc_sameRunNumberDifferentDims_collapsedAsRerun() throws Exception {
+        // portfolio is run-number-aware but dimensionless (NONE). A re-trigger of the same run_number
+        // can carry different incidental region/run_type. With no run_number in the query (seahorse
+        // path), the two attempts share one logical slot (run_number=1) and must collapse into a
+        // single entry flagged isRerun=true — incidental dims must never split a dimensionless slot.
+        when(nameResolver.dimensionOf("portfolio")).thenReturn(Dimension.NONE);
+        when(nameResolver.isRunNumberAware("portfolio")).thenReturn(true);
+
+        var first = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-1a").region("GLB3").runType("BATCH").runNumber("1")
+                .startTime(Instant.parse("2026-03-06T08:00:00Z"))
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var second = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-1b").region("GLB3").runType("INTRA").runNumber("1")
+                .startTime(Instant.parse("2026-03-06T09:00:00Z"))
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("portfolio", null,
+                List.of(first, second));
+        when(calculatorStateService.getState(any(), any(), isNull(), eq(List.of("portfolio")), anyBoolean()))
+                .thenReturn(Map.of("portfolio", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-06")
+                        .param("keys", "portfolio")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.portfolio.runs.length()").value(1))
+                .andExpect(jsonPath("$.calculators.portfolio.runs[0].runNumber").value("1"))
+                .andExpect(jsonPath("$.calculators.portfolio.runs[0].isRerun").value(true));
+    }
+
+    @Test
     void batchRuns_runEntryCarriesRunNumber() throws Exception {
         var runEntry = CalculatorBatchRunsResponse.RunEntry.builder()
                 .runId("r-1").region("AMER").runNumber("2")
