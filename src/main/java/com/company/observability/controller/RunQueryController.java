@@ -173,28 +173,17 @@ public class RunQueryController {
                     .toList();
         } else {
             // Seahorse fold: collect dim values that have at least one numbered run, then drop
-            // null-run_number rows only for those dims.
+            // null-run_number rows only for those dims. A dimensionless (NONE) calculator is a single
+            // logical slot keyed only by run_number, so foldKey folds all its rows under one constant
+            // key — a null is then dropped whenever any numbered cycle exists, regardless of any
+            // incidental region/run_type difference between the numbered and the legacy null row.
             Dimension dimForFold = nameResolver.dimensionOf(alias);
             Set<String> numberedDims = allRuns.stream()
                     .filter(r -> r.runNumber() != null)
-                    .map(r -> switch (dimForFold) {
-                        case REGION   -> Objects.toString(r.region(), "");
-                        case RUN_TYPE -> Objects.toString(r.runType(), "");
-                        case NONE     -> Objects.toString(r.region(), "") + "|"
-                                       + Objects.toString(r.runType(), "");
-                    })
+                    .map(r -> foldKey(r, dimForFold))
                     .collect(Collectors.toSet());
             candidates = allRuns.stream()
-                    .filter(r -> {
-                        if (r.runNumber() != null) return true;
-                        String dim = switch (dimForFold) {
-                            case REGION   -> Objects.toString(r.region(), "");
-                            case RUN_TYPE -> Objects.toString(r.runType(), "");
-                            case NONE     -> Objects.toString(r.region(), "") + "|"
-                                           + Objects.toString(r.runType(), "");
-                        };
-                        return !numberedDims.contains(dim);
-                    })
+                    .filter(r -> r.runNumber() != null || !numberedDims.contains(foldKey(r, dimForFold)))
                     .toList();
         }
 
@@ -231,5 +220,19 @@ public class RunQueryController {
                 .toList();
 
         return new CalculatorBatchRunsResponse.CalculatorEntry(alias, mergedId, deduped);
+    }
+
+    /**
+     * Dimension-fold key used by the seahorse null-run_number suppression. REGION/RUN_TYPE
+     * calculators key on their dimension value; a dimensionless (NONE) calculator collapses to a
+     * single logical slot (constant key) — its runs are distinguished only by run_number, so any
+     * incidental region/run_type must not split the fold.
+     */
+    private static String foldKey(CalculatorBatchRunsResponse.RunEntry r, Dimension dim) {
+        return switch (dim) {
+            case REGION   -> Objects.toString(r.region(), "");
+            case RUN_TYPE -> Objects.toString(r.runType(), "");
+            case NONE     -> "";
+        };
     }
 }

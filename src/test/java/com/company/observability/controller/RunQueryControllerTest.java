@@ -419,6 +419,61 @@ class RunQueryControllerTest {
     }
 
     @Test
+    void seahorseFold_dimensionlessAwareCalc_nullDroppedWhenNumberedExists_evenWithDifferingDimension()
+            throws Exception {
+        // portfolio is run-number-aware but dimensionless (NONE). A numbered run and a legacy
+        // null-run_number run carry DIFFERENT incidental region values. With no run_number in the
+        // query (seahorse path), the null must still be suppressed because a numbered cycle exists —
+        // a dimensionless calculator is one logical slot, distinguished only by run_number.
+        when(nameResolver.dimensionOf("portfolio")).thenReturn(Dimension.NONE);
+        when(nameResolver.isRunNumberAware("portfolio")).thenReturn(true);
+
+        var numbered = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-1").region("GLOBAL").runNumber("1")
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var nullRn = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-null").region(null).runNumber(null)
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("portfolio", null,
+                List.of(numbered, nullRn));
+        when(calculatorStateService.getState(any(), any(), isNull(), eq(List.of("portfolio")), anyBoolean()))
+                .thenReturn(Map.of("portfolio", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-06")
+                        .param("keys", "portfolio")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.portfolio.runs.length()").value(1))
+                .andExpect(jsonPath("$.calculators.portfolio.runs[0].runId").value("r-1"))
+                .andExpect(jsonPath("$.calculators.portfolio.runs[0].runNumber").value("1"));
+    }
+
+    @Test
+    void seahorseFold_dimensionlessCalc_allNullRunsKeptWhenNoNumberedExists() throws Exception {
+        // Guard against over-suppression: a dimensionless calculator with only null-run_number rows
+        // (no numbered cycle yet) must keep them — the constant fold key drops a null only when a
+        // numbered sibling exists.
+        when(nameResolver.dimensionOf("portfolio")).thenReturn(Dimension.NONE);
+        when(nameResolver.isRunNumberAware("portfolio")).thenReturn(true);
+
+        var nullRn = CalculatorBatchRunsResponse.RunEntry.builder()
+                .runId("r-null").region(null).runNumber(null)
+                .status("SUCCESS").slaStatus("ON_TIME").isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("portfolio", null, List.of(nullRn));
+        when(calculatorStateService.getState(any(), any(), isNull(), eq(List.of("portfolio")), anyBoolean()))
+                .thenReturn(Map.of("portfolio", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-06")
+                        .param("keys", "portfolio")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.portfolio.runs.length()").value(1))
+                .andExpect(jsonPath("$.calculators.portfolio.runs[0].runId").value("r-null"));
+    }
+
+    @Test
     void batchRuns_runEntryCarriesRunNumber() throws Exception {
         var runEntry = CalculatorBatchRunsResponse.RunEntry.builder()
                 .runId("r-1").region("AMER").runNumber("2")

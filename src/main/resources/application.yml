@@ -151,7 +151,7 @@ observability:
       modelled-exposure: [ETD, OTC, SFT]
       gemini-hedge: [ETD, OTC, SFT]
     # Run-number-aware calculators, declared by ALIAS (same keys as regions/run-types). Presence = aware.
-    run-number-aware: [capital]
+    run-number-aware: [capital, portfolio]
 
   cache:
     eviction:
