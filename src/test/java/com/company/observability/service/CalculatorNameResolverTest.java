@@ -19,7 +19,8 @@ class CalculatorNameResolverTest {
         CalculatorProperties props = new CalculatorProperties();
         props.setAliases(Map.of(
                 "capital", List.of("capitalcalc", "capitalcalcmedium"),
-                "portfolio", List.of("portfoliocalc")
+                "portfolio", List.of("portfoliocalc"),
+                "modelled-exposure", List.of("modelledexposurecalc")
         ));
         props.setRegions(Map.of(
                 "capital", List.of("AMER", "EMEA", "APAC")
@@ -127,9 +128,25 @@ class CalculatorNameResolverTest {
     }
 
     @Test
-    void isRunNumberAware_realNameOfAwareAlias_false() {
-        // "capital" is the aware alias; its real names must NOT match (alias-keyed lookup).
-        assertThat(resolver.isRunNumberAware("capitalcalc")).isFalse();
-        assertThat(resolver.isRunNumberAware("capitalcalcmedium")).isFalse();
+    void isRunNumberAware_realNameOfAwareAlias_true() {
+        // real names reverse-resolve to their alias; "capital" is run-number-aware.
+        assertThat(resolver.isRunNumberAware("capitalcalc")).isTrue();
+        assertThat(resolver.isRunNumberAware("capitalcalcmedium")).isTrue();
+    }
+
+    @Test
+    void dimensionOf_realNameOfRegionAlias_returnsRegion() {
+        assertThat(resolver.dimensionOf("capitalcalc")).isEqualTo(Dimension.REGION);
+    }
+
+    @Test
+    void dimensionOf_realNameOfRunTypeAlias_returnsRunType() {
+        assertThat(resolver.dimensionOf("modelledexposurecalc")).isEqualTo(Dimension.RUN_TYPE);
+    }
+
+    @Test
+    void isRunNumberAware_realNameOfAgnosticAlias_false() {
+        // "portfolio" is not run-number-aware; its real name must stay false.
+        assertThat(resolver.isRunNumberAware("portfoliocalc")).isFalse();
     }
 }

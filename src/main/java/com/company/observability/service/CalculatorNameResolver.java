@@ -58,22 +58,33 @@ public class CalculatorNameResolver {
     }
 
     /**
-     * Returns the primary dimension used to distinguish runs for this alias.
+     * Normalizes a name to its alias key: a real {@code calculator_name} is reverse-mapped to the
+     * alias it belongs to; an alias (or any unmapped name) is returned unchanged. This lets the
+     * classification methods accept EITHER the alias or the real calculator_name.
+     */
+    private String toAlias(String nameOrAlias) {
+        return findAliasFor(nameOrAlias).orElse(nameOrAlias);
+    }
+
+    /**
+     * Returns the primary dimension used to distinguish runs for this calculator.
      * REGION for region-configured calculators, RUN_TYPE for type-configured, NONE otherwise.
+     * Accepts either the alias or a real {@code calculator_name}.
      */
     public Dimension dimensionOf(String nameOrAlias) {
-        if (calculatorProperties.getRegions().containsKey(nameOrAlias))  return Dimension.REGION;
-        if (calculatorProperties.getRunTypes().containsKey(nameOrAlias)) return Dimension.RUN_TYPE;
+        String alias = toAlias(nameOrAlias);
+        if (calculatorProperties.getRegions().containsKey(alias))  return Dimension.REGION;
+        if (calculatorProperties.getRunTypes().containsKey(alias)) return Dimension.RUN_TYPE;
         return Dimension.NONE;
     }
 
     /**
-     * Returns true when the alias is declared in {@code run-number-aware}, meaning Airflow sends
-     * a numbered cycle ({@code run_number=1}, {@code run_number=2}, …) and null-{@code run_number}
-     * rows should be suppressed for strict cycle-scoped queries. {@code nameOrAlias} is matched as
-     * an <b>alias</b> (the env-invariant key), not a real {@code calculator_name}.
+     * Returns true when the calculator is declared in {@code run-number-aware}, meaning Airflow
+     * sends a numbered cycle ({@code run_number=1}, {@code run_number=2}, …) and null-{@code
+     * run_number} rows should be suppressed for strict cycle-scoped queries. Accepts either the
+     * alias or a real {@code calculator_name}.
      */
     public boolean isRunNumberAware(String nameOrAlias) {
-        return calculatorProperties.getRunNumberAware().contains(nameOrAlias);
+        return calculatorProperties.getRunNumberAware().contains(toAlias(nameOrAlias));
     }
 }
