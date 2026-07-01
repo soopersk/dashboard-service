@@ -3,6 +3,7 @@ package com.company.observability.service;
 import com.company.observability.cache.SlaMonitoringCache;
 import com.company.observability.config.SlaProperties;
 import com.company.observability.domain.CalculatorRun;
+import com.company.observability.domain.enums.Dimension;
 import com.company.observability.domain.enums.Frequency;
 import com.company.observability.domain.enums.CompletionStatus;
 import com.company.observability.domain.enums.RunStatus;
@@ -54,6 +55,8 @@ class RunIngestionServiceTest {
     private ApplicationEventPublisher eventPublisher;
     @Mock
     private SlaMonitoringCache slaMonitoringCache;
+    @Mock
+    private CalculatorNameResolver calculatorNameResolver;
 
     private RunIngestionService service;
 
@@ -74,7 +77,8 @@ class RunIngestionServiceTest {
                 new SimpleMeterRegistry(),
                 slaMonitoringCache,
                 new com.company.observability.logging.LifecycleLogger(),
-                slaProperties
+                slaProperties,
+                calculatorNameResolver
         );
         // Default scoped-profile chain: no history. Individual tests override the 4-arg
         // (estimate) overload when they need profile-sourced estimates.
@@ -694,6 +698,68 @@ class RunIngestionServiceTest {
                 expectedStart.equals(run.getEstimatedStartTime())
                         && expectedStart.plusMillis(1_800_000L).equals(run.getEstimatedEndTime())
                         && Long.valueOf(1_800_000L).equals(run.getExpectedDurationMs())));
+    }
+
+    // ---------------------------------------------------------------
+    // Dimension-agnostic ingestion guard — NONE calcs collapse stray labels to 'ALL'
+    // ---------------------------------------------------------------
+
+    @Test
+    void startRun_noneCalc_strayRegion_collapsedToAllAndPreservedInAttributes() {
+        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
+        LocalDate reportingDate = LocalDate.of(2026, 2, 20);
+        Instant start = Instant.parse("2026-02-20T05:00:00Z");
+
+        when(calculatorNameResolver.dimensionOf("portfolio")).thenReturn(Dimension.NONE);
+
+        StartRunRequest request = StartRunRequest.builder()
+                .runId("run-none").calculatorId("calc-1").calculatorName("portfolio")
+                .frequency(Frequency.DAILY).reportingDate(reportingDate).startTime(start)
+                .region("GLOBAL")
+                .additionalAttributes(new java.util.HashMap<>(java.util.Map.of("source", "airflow")))
+                .build();
+
+        when(runRepository.findById("run-none", reportingDate)).thenReturn(Optional.empty());
+        when(runRepository.upsert(any(CalculatorRun.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(slaBaselineResolver.resolve(any(StartRunRequest.class), eq(Frequency.DAILY), any()))
+                .thenReturn(new SlaBaselineResolver.SlaResolution(null, null));
+
+        service.startRun(request, "tenant-1");
+
+        // region column nulled; label preserved in additional_attributes; pre-existing key survives.
+        verify(runRepository).upsert(argThat(run ->
+                run.getRegion() == null
+                        && run.getRunType() == null
+                        && "GLOBAL".equals(run.getAdditionalAttributes().get("region"))
+                        && "airflow".equals(run.getAdditionalAttributes().get("source"))));
+        // Dimension null → estimates routed to the blended (3-arg) profile, not a per-region slice.
+        verify(calculatorProfileService).getProfile("portfolio", Frequency.DAILY, null, null);
+    }
+
+    @Test
+    void startRun_regionCalc_regionLeftUntouched() {
+        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
+        LocalDate reportingDate = LocalDate.of(2026, 2, 20);
+        Instant start = Instant.parse("2026-02-20T05:00:00Z");
+
+        when(calculatorNameResolver.dimensionOf("capital")).thenReturn(Dimension.REGION);
+
+        StartRunRequest request = StartRunRequest.builder()
+                .runId("run-region").calculatorId("calc-1").calculatorName("capital")
+                .frequency(Frequency.DAILY).reportingDate(reportingDate).startTime(start)
+                .region("AMER")
+                .build();
+
+        when(runRepository.findById("run-region", reportingDate)).thenReturn(Optional.empty());
+        when(runRepository.upsert(any(CalculatorRun.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(slaBaselineResolver.resolve(any(StartRunRequest.class), eq(Frequency.DAILY), any()))
+                .thenReturn(new SlaBaselineResolver.SlaResolution(null, null));
+
+        service.startRun(request, "tenant-1");
+
+        // REGION archetype: region kept as the dimension, estimates routed to the AMER slice.
+        verify(runRepository).upsert(argThat(run -> "AMER".equals(run.getRegion())));
+        verify(calculatorProfileService).getProfile("capital", Frequency.DAILY, null, "AMER");
     }
 
     // ---------------------------------------------------------------

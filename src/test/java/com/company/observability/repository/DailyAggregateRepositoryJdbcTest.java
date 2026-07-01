@@ -2,6 +2,7 @@ package com.company.observability.repository;
 
 import com.company.observability.domain.CalculatorProfile;
 import com.company.observability.domain.DailyAggregate;
+import com.company.observability.domain.enums.Frequency;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -75,6 +76,29 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
                 region, runNumber, start, end, durationMs, "SUCCESS");
     }
 
+    /** Recompute both frequencies over the same range (mirrors the nightly job's two calls). */
+    private int recomputeBoth(LocalDate from, LocalDate to) {
+        return repository.recomputeForDateRange(from, to, Frequency.DAILY)
+                + repository.recomputeForDateRange(from, to, Frequency.MONTHLY);
+    }
+
+    /**
+     * V2 pre-creates partitions only for [yesterday, +60d]. Tests that need an older reporting_date
+     * (recompute-window sizing, Tier-2 lookback) create the daily partition on demand.
+     */
+    private void ensurePartition(LocalDate date) {
+        String name = "calculator_runs_" + date.toString().replace('-', '_');
+        jdbcTemplate.update(String.format(
+                "CREATE TABLE IF NOT EXISTS %s PARTITION OF calculator_runs FOR VALUES FROM ('%s') TO ('%s')",
+                name, date, date.plusDays(1)));
+    }
+
+    /** Insert one completed run at an arbitrary reporting_date, creating its partition first. */
+    private void insertRunAt(String runId, String calcId, String frequency, LocalDate reportingDate, long durationMs) {
+        ensurePartition(reportingDate);
+        insertRun(runId, calcId, "tenant-1", frequency, reportingDate, 300, durationMs, "SUCCESS", false);
+    }
+
     // ---------------------------------------------------------------
     // recomputeForDateRange — build aggregate from source runs
     // ---------------------------------------------------------------
@@ -84,7 +108,7 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
         insertRun("r1", "calc-1", "tenant-1", "DAILY", DATE, 300, 100L, "SUCCESS", false);
         insertRun("r2", "calc-1", "tenant-1", "DAILY", DATE, 360, 200L, "SUCCESS", false);
 
-        repository.recomputeForDateRange(DATE.minusDays(1), DATE);
+        recomputeBoth(DATE.minusDays(1), DATE);
 
         List<DailyAggregate> results = repository.findRecentAggregates("calc-1", 3);
         assertThat(results).hasSize(1);
@@ -97,8 +121,8 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
     void recompute_isIdempotent() {
         insertRun("r1", "calc-1", "tenant-1", "DAILY", DATE, 300, 100L, "SUCCESS", false);
 
-        repository.recomputeForDateRange(DATE.minusDays(1), DATE);
-        repository.recomputeForDateRange(DATE.minusDays(1), DATE);
+        recomputeBoth(DATE.minusDays(1), DATE);
+        recomputeBoth(DATE.minusDays(1), DATE);
 
         List<DailyAggregate> results = repository.findRecentAggregates("calc-1", 3);
         assertThat(results).hasSize(1);
@@ -113,7 +137,7 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
     void findProfile_separatesByFrequency_evenOnSharedDate() {
         insertRun("d1", "calc-1", "tenant-1", "DAILY", DATE, 300, 100L, "SUCCESS", false);
         insertRun("m1", "calc-1", "tenant-1", "MONTHLY", DATE, 300, 500L, "SUCCESS", false);
-        repository.recomputeForDateRange(DATE.minusDays(1), DATE);
+        recomputeBoth(DATE.minusDays(1), DATE);
 
         CalculatorProfile daily = repository.findProfile("calc-1", "DAILY", 3);
         CalculatorProfile monthly = repository.findProfile("calc-1", "MONTHLY", 3);
@@ -128,7 +152,7 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
     void findRecentAggregates_collapsesAcrossFrequency() {
         insertRun("d1", "calc-1", "tenant-1", "DAILY", DATE, 300, 100L, "SUCCESS", false);
         insertRun("m1", "calc-1", "tenant-1", "MONTHLY", DATE, 300, 500L, "SUCCESS", false);
-        repository.recomputeForDateRange(DATE.minusDays(1), DATE);
+        recomputeBoth(DATE.minusDays(1), DATE);
 
         List<DailyAggregate> results = repository.findRecentAggregates("calc-1", 3);
 
@@ -142,7 +166,7 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
         insertRun("a1", "calc-A", "tenant-1", "DAILY", DATE, 300, 100L, "SUCCESS", false);
         insertRun("a2", "calc-A", "tenant-1", "DAILY", DATE, 360, 300L, "SUCCESS", false);
         insertRun("b1", "calc-B", "tenant-1", "DAILY", DATE, 300, 50L, "SUCCESS", false);
-        repository.recomputeForDateRange(DATE.minusDays(1), DATE);
+        recomputeBoth(DATE.minusDays(1), DATE);
 
         List<CalculatorProfile> profiles = repository.findAllProfiles("DAILY", 3);
 
@@ -171,7 +195,7 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
         insertRunDim("w2", "calc-R", DATE.minusDays(1), "WMAP", "1", 100L);
         insertRunDim("n1", "calc-N", DATE,           null,   "1", 50L);
 
-        repository.recomputeForDateRange(DATE.minusDays(1), DATE);
+        recomputeBoth(DATE.minusDays(1), DATE);
 
         List<String> dimsR = jdbcTemplate.queryForList(
                 "SELECT DISTINCT dimension_value FROM calculator_sli_daily WHERE calculator_name = 'calc-R'",
@@ -190,7 +214,7 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
         // Pre-split: two runs, no region → both land in 'ALL'
         insertRun("p1", "calc-1", "tenant-1", "DAILY", DATE, 300, 100L, "SUCCESS", false);
         insertRun("p2", "calc-1", "tenant-1", "DAILY", DATE, 300, 300L, "SUCCESS", false);
-        repository.recomputeForDateRange(DATE.minusDays(1), DATE);
+        recomputeBoth(DATE.minusDays(1), DATE);
         CalculatorProfile preSplit = repository.findProfile("calc-1", "DAILY", 3);
 
         clean();
@@ -198,7 +222,7 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
         // Post-split: same two durations, now across distinct regions
         insertRunDim("s1", "calc-1", DATE, "WMAP", "1", 100L);
         insertRunDim("s2", "calc-1", DATE, "EMEA", "1", 300L);
-        repository.recomputeForDateRange(DATE.minusDays(1), DATE);
+        recomputeBoth(DATE.minusDays(1), DATE);
         CalculatorProfile postSplit = repository.findProfile("calc-1", "DAILY", 3);
 
         assertThat(postSplit.totalRuns()).isEqualTo(preSplit.totalRuns()).isEqualTo(2);
@@ -214,7 +238,7 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
     void findProfileByRunNumberAndDimension_nullRunNumber_sumsAcrossRunNumbers() {
         insertRunDim("w1", "calc-R", DATE, "WMAP", "1", 100L);
         insertRunDim("w2", "calc-R", DATE, "WMAP", "2", 300L);
-        repository.recomputeForDateRange(DATE.minusDays(1), DATE);
+        recomputeBoth(DATE.minusDays(1), DATE);
 
         CalculatorProfile allRns = repository.findProfileByRunNumberAndDimension(
                 "calc-R", "DAILY", 3, null, "WMAP");
@@ -232,12 +256,78 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
     void findAllProfilesByRunNumberAndDimension_excludesAllBucket() {
         insertRunDim("w1", "calc-R", DATE, "WMAP", "1", 100L);
         insertRunDim("n1", "calc-N", DATE, null,   "1", 50L);
-        repository.recomputeForDateRange(DATE.minusDays(1), DATE);
+        recomputeBoth(DATE.minusDays(1), DATE);
 
         List<CalculatorProfile> profiles = repository.findAllProfilesByRunNumberAndDimension("DAILY", 3);
 
         assertThat(profiles).extracting(CalculatorProfile::dimensionValue)
                 .contains("WMAP")
                 .doesNotContain("ALL");
+    }
+
+    // ---------------------------------------------------------------
+    // Frequency-aware recompute window (write/settling time)
+    // ---------------------------------------------------------------
+
+    /**
+     * A MONTHLY reporting_date whose runs complete deep into the following month is dropped by a
+     * DAILY-sized window but captured by the 20-day MONTHLY window. Regression for the structural
+     * gap where {@code calculator_sli_daily} was permanently empty for MONTHLY.
+     */
+    @Test
+    void recompute_monthlyWindow_capturesDateOutsideDailyWindow() {
+        LocalDate monthlyDate = DATE.minusDays(10);   // beyond a 7-day daily window, inside a 20-day monthly one
+        insertRunAt("m1", "calc-M", "MONTHLY", monthlyDate, 500L);
+
+        // DAILY-sized window (7d) misses it entirely.
+        repository.recomputeForDateRange(DATE.minusDays(7), DATE, Frequency.MONTHLY);
+        assertThat(repository.findByReportingDates("calc-M", List.of(monthlyDate))).isEmpty();
+
+        // MONTHLY window (20d) captures it.
+        repository.recomputeForDateRange(DATE.minusDays(20), DATE, Frequency.MONTHLY);
+        List<DailyAggregate> captured = repository.findByReportingDates("calc-M", List.of(monthlyDate));
+        assertThat(captured).hasSize(1);
+        assertThat(captured.get(0).totalRuns()).isEqualTo(1);
+    }
+
+    /** A DAILY reporting_date completing T+2 over a weekend (~4 calendar days) is captured under a 7-day window. */
+    @Test
+    void recompute_dailyWindow_capturesTPlus2FridayCompletion() {
+        LocalDate dailyDate = DATE.minusDays(4);
+        insertRunAt("d1", "calc-D", "DAILY", dailyDate, 120L);
+
+        // Old generic 3-day window misses it.
+        repository.recomputeForDateRange(DATE.minusDays(3), DATE, Frequency.DAILY);
+        assertThat(repository.findByReportingDates("calc-D", List.of(dailyDate))).isEmpty();
+
+        // 7-day daily window captures it.
+        repository.recomputeForDateRange(DATE.minusDays(7), DATE, Frequency.DAILY);
+        assertThat(repository.findByReportingDates("calc-D", List.of(dailyDate))).hasSize(1);
+    }
+
+    // ---------------------------------------------------------------
+    // Tier-2 cold-start fallback — window is `lookback`, not a hardcoded 90 days
+    // ---------------------------------------------------------------
+
+    /**
+     * With an empty aggregate, ~6 MONTHLY SUCCESS runs spread across the last year yield only ~3
+     * samples under the old hardcoded 90-day window but reach the {@code LIMIT 5} under the MONTHLY
+     * lookback (395). Regression for the third, incoherent window collapse.
+     */
+    @Test
+    void findRecentExactByRunNumber_monthlyLookback_reachesFiveSamples() {
+        // EOM-ish dates roughly one per month back through the year.
+        int[] daysAgo = {20, 50, 80, 110, 140, 170};
+        for (int i = 0; i < daysAgo.length; i++) {
+            insertRunAt("m" + i, "calc-M", "MONTHLY", DATE.minusDays(daysAgo[i]), 500L + i);
+        }
+
+        // Old 90-day window: only the first three dates (20/50/80) qualify.
+        CalculatorProfile narrow = repository.findRecentExactByRunNumber("calc-M", "MONTHLY", 90, null);
+        assertThat(narrow.totalRuns()).isEqualTo(3);
+
+        // MONTHLY lookback (395): reaches the LIMIT 5 cap.
+        CalculatorProfile wide = repository.findRecentExactByRunNumber("calc-M", "MONTHLY", 395, null);
+        assertThat(wide.totalRuns()).isEqualTo(5);
     }
 }

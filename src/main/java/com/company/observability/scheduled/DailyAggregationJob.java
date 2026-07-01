@@ -62,16 +62,21 @@ public class DailyAggregationJob {
         Timer.Sample sample = Timer.start(meterRegistry);
         try {
             LocalDate today = LocalDate.now(ZoneOffset.UTC);
-            LocalDate from = today.minusDays(aggregationProperties.getRecomputeWindowDays());
+            AggregationProperties.RecomputeWindow win = aggregationProperties.getRecomputeWindow();
+            LocalDate dailyFrom = today.minusDays(win.getDailyDays());
+            LocalDate monthlyFrom = today.minusDays(win.getMonthlyDays());
 
-            int rows = dailyAggregateRepository.recomputeForDateRange(from, today);
+            // Two calls over disjoint frequency partitions — the overlapping [dailyFrom, today]
+            // range is not double-processed because each call filters on its own frequency.
+            int rows = dailyAggregateRepository.recomputeForDateRange(dailyFrom, today, Frequency.DAILY)
+                    + dailyAggregateRepository.recomputeForDateRange(monthlyFrom, today, Frequency.MONTHLY);
             lastRecomputedRows.set(rows);
 
             long warmed = warmProfiles();
             lastProfilesWarmed.set(warmed);
 
-            log.info("event=aggregation.daily outcome=success from={} to={} rowsRecomputed={} profilesWarmed={}",
-                    from, today, rows, warmed);
+            log.info("event=aggregation.daily outcome=success dailyFrom={} monthlyFrom={} to={} rowsRecomputed={} profilesWarmed={}",
+                    dailyFrom, monthlyFrom, today, rows, warmed);
             meterRegistry.counter("obs.aggregation.execution", "result", "success").increment();
         } catch (Exception e) {
             log.error("event=aggregation.daily outcome=failure", e);

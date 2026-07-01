@@ -92,7 +92,7 @@ public class CalculatorProfileService {
 
         // Tier 2: last raw runs for the exact run_number slice.
         CalculatorProfile recent = dailyAggregateRepository.findRecentExactByRunNumber(
-                calculatorName, frequency.name(), runNumber);
+                calculatorName, frequency.name(), slaProperties.lookbackDays(frequency), runNumber);
         if (recent.totalRuns() > 0) {
             return cacheAndReturn(key, recent.withConfidence(CalculatorProfile.ProfileConfidence.RECENT_EXACT));
         }
@@ -138,7 +138,7 @@ public class CalculatorProfileService {
 
         // Tier 2: last raw runs for the exact dimension slice.
         CalculatorProfile recent = dailyAggregateRepository.findRecentExactByDimension(
-                calculatorName, frequency.name(), runNumber, dimensionValue);
+                calculatorName, frequency.name(), slaProperties.lookbackDays(frequency), runNumber, dimensionValue);
         if (recent.totalRuns() > 0) {
             return cacheAndReturn(key, recent.withConfidence(CalculatorProfile.ProfileConfidence.RECENT_EXACT));
         }

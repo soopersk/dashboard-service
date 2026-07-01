@@ -19,6 +19,7 @@ import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -160,7 +161,7 @@ class CalculatorProfileServiceTest {
         assertThat(result.avgDurationMs()).isEqualTo(450_000L);
         assertThat(result.confidence()).isEqualTo(CalculatorProfile.ProfileConfidence.SPARSE_EXACT);
         // Sparse-but-exact data short-circuits — Tier 2 is not consulted.
-        verify(dailyAggregateRepository, never()).findRecentExactByRunNumber(anyString(), anyString(), anyString());
+        verify(dailyAggregateRepository, never()).findRecentExactByRunNumber(anyString(), anyString(), anyInt(), anyString());
     }
 
     @Test
@@ -170,7 +171,7 @@ class CalculatorProfileServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
         when(valueOps.get(SCOPED_KEY)).thenReturn(null);
         when(dailyAggregateRepository.findProfileByRunNumber("calc-1", "DAILY", 30, "1")).thenReturn(empty);
-        when(dailyAggregateRepository.findRecentExactByRunNumber("calc-1", "DAILY", "1")).thenReturn(recent);
+        when(dailyAggregateRepository.findRecentExactByRunNumber("calc-1", "DAILY", 30, "1")).thenReturn(recent);
 
         CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY, "1");
 
@@ -187,7 +188,7 @@ class CalculatorProfileServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
         when(valueOps.get(SCOPED_KEY)).thenReturn(null);
         when(dailyAggregateRepository.findProfileByRunNumber("calc-1", "DAILY", 30, "1")).thenReturn(empty);
-        when(dailyAggregateRepository.findRecentExactByRunNumber("calc-1", "DAILY", "1")).thenReturn(empty);
+        when(dailyAggregateRepository.findRecentExactByRunNumber("calc-1", "DAILY", 30, "1")).thenReturn(empty);
 
         CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY, "1");
 
@@ -235,7 +236,7 @@ class CalculatorProfileServiceTest {
         when(valueOps.get(DIM_KEY)).thenReturn(null);
         when(dailyAggregateRepository.findProfileByRunNumberAndDimension("calc-1", "DAILY", 30, "1", "WMAP"))
                 .thenReturn(emptyDim);
-        when(dailyAggregateRepository.findRecentExactByDimension("calc-1", "DAILY", "1", "WMAP"))
+        when(dailyAggregateRepository.findRecentExactByDimension("calc-1", "DAILY", 30, "1", "WMAP"))
                 .thenReturn(recentDim);
 
         CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY, "1", "WMAP");
@@ -258,7 +259,7 @@ class CalculatorProfileServiceTest {
         when(valueOps.get(DIM_NULL_RN_KEY)).thenReturn(null);
         when(dailyAggregateRepository.findProfileByRunNumberAndDimension("calc-1", "DAILY", 30, null, "WMAP"))
                 .thenReturn(emptyDim);
-        when(dailyAggregateRepository.findRecentExactByDimension("calc-1", "DAILY", null, "WMAP"))
+        when(dailyAggregateRepository.findRecentExactByDimension("calc-1", "DAILY", 30, null, "WMAP"))
                 .thenReturn(recentDim);
 
         CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY, null, "WMAP");

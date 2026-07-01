@@ -135,7 +135,10 @@ observability:
     daily:
       enabled: true
       cron: "0 30 0 * * *"        # 00:30 every day
-    recompute-window-days: 3       # trailing reporting dates recomputed (late completions)
+    recompute-window:              # frequency-aware trailing recompute window (write/settling time)
+      daily-days: 7                # >= max T+N completion lag (T+2 over a weekend ~= 4 calendar days)
+      monthly-days: 20             # runs execute Day 1-15 of next month (= D+1..D+15 from EOM); window
+                                   # freezes reporting_date at D+20, capturing completions up to ~D+19.
     profile-cache-ttl-hours: 26
     empty-profile-cache-ttl-minutes: 60
 

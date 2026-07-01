@@ -3,6 +3,7 @@ package com.company.observability.scheduled;
 import com.company.observability.config.AggregationProperties;
 import com.company.observability.config.SlaProperties;
 import com.company.observability.domain.CalculatorProfile;
+import com.company.observability.domain.enums.Frequency;
 import com.company.observability.repository.DailyAggregateRepository;
 import com.company.observability.service.CalculatorProfileService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -42,9 +43,11 @@ class DailyAggregationJobTest {
     @Test
     void runDailyAggregation_recomputesTrailingWindow_andWarmsAllThreeTiers() {
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
-        LocalDate from = today.minusDays(3); // default recompute-window-days
+        LocalDate dailyFrom = today.minusDays(7);    // default recompute-window daily-days
+        LocalDate monthlyFrom = today.minusDays(20); // default recompute-window monthly-days
 
-        when(dailyAggregateRepository.recomputeForDateRange(from, today)).thenReturn(5);
+        when(dailyAggregateRepository.recomputeForDateRange(dailyFrom, today, Frequency.DAILY)).thenReturn(3);
+        when(dailyAggregateRepository.recomputeForDateRange(monthlyFrom, today, Frequency.MONTHLY)).thenReturn(2);
 
         CalculatorProfile dailyBlended  = new CalculatorProfile("calc-1", "DAILY",   null, null, 100L, 0, 0, 10);
         CalculatorProfile monthlyBlended = new CalculatorProfile("calc-1", "MONTHLY", null, null, 200L, 0, 0, 3);
@@ -64,7 +67,8 @@ class DailyAggregationJobTest {
 
         job.runDailyAggregation();
 
-        verify(dailyAggregateRepository).recomputeForDateRange(eq(from), eq(today));
+        verify(dailyAggregateRepository).recomputeForDateRange(eq(dailyFrom), eq(today), eq(Frequency.DAILY));
+        verify(dailyAggregateRepository).recomputeForDateRange(eq(monthlyFrom), eq(today), eq(Frequency.MONTHLY));
         // Third warming tier must be invoked for each frequency
         verify(dailyAggregateRepository, times(2)).findAllProfilesByRunNumberAndDimension(anyString(), anyInt());
         // Four profiles total warmed: blended daily, blended monthly, scoped daily, dim-scoped daily

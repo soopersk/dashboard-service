@@ -5,6 +5,7 @@ import com.company.observability.config.SlaProperties;
 import com.company.observability.domain.CalculatorProfile;
 import com.company.observability.domain.CalculatorRun;
 import com.company.observability.domain.SlaEvaluationResult;
+import com.company.observability.domain.enums.Dimension;
 import com.company.observability.domain.enums.Frequency;
 import com.company.observability.domain.enums.CompletionStatus;
 import com.company.observability.domain.enums.RunStatus;
@@ -29,6 +30,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.*;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -50,6 +52,7 @@ public class RunIngestionService {
     private final SlaMonitoringCache slaMonitoringCache;
     private final LifecycleLogger lifecycleLogger;
     private final SlaProperties slaProperties;
+    private final CalculatorNameResolver calculatorNameResolver;
 
     @Value("${observability.sla.live-tracking.enabled:true}")
     private boolean liveTrackingEnabled;
@@ -89,6 +92,23 @@ public class RunIngestionService {
                 resolveField(request.getRunNumber(), request.getRunParameters(), "run_number"));
         String runType = resolveField(request.getRunType(), request.getRunParameters(), "run_type");
         String region = resolveField(request.getRegion(), request.getRunParameters(), "region");
+
+        // Dimension-agnostic guard: a NONE-archetype calculator must not be split into per-slice
+        // profiles by a stray/inconsistent label. Collapse region/run_type to the 'ALL' slice but
+        // preserve the original label(s) in additional_attributes for future use.
+        Map<String, Object> additionalAttributes = request.getAdditionalAttributes();
+        if (calculatorNameResolver.dimensionOf(request.getCalculatorName()) == Dimension.NONE
+                && (region != null || runType != null)) {
+            additionalAttributes = additionalAttributes != null
+                    ? new LinkedHashMap<>(additionalAttributes)
+                    : new LinkedHashMap<>();
+            if (region != null) additionalAttributes.put("region", region);
+            if (runType != null) additionalAttributes.put("run_type", runType);
+            
+            region = null;
+            runType = null;
+        }
+
         // Mirrors the aggregate's COALESCE(region, run_type, 'ALL') dimension key.
         String dimension = region != null ? region : runType;
 
@@ -127,7 +147,7 @@ public class RunIngestionService {
                 .region(region)
                 .correlationId(request.getCorrelationId())
                 .runParameters(request.getRunParameters())
-                .additionalAttributes(request.getAdditionalAttributes())
+                .additionalAttributes(additionalAttributes)
                 .slaBand(null)
                 .slaBreachReason(null)
                 .build();

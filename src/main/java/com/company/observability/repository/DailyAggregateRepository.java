@@ -2,6 +2,7 @@ package com.company.observability.repository;
 
 import com.company.observability.domain.CalculatorProfile;
 import com.company.observability.domain.DailyAggregate;
+import com.company.observability.domain.enums.Frequency;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
@@ -39,13 +40,15 @@ public class DailyAggregateRepository {
      * <p>Called by the nightly {@code DailyAggregationJob}.
      */
     @Transactional
-    public int recomputeForDateRange(LocalDate fromInclusive, LocalDate toInclusive) {
+    public int recomputeForDateRange(LocalDate fromInclusive, LocalDate toInclusive, Frequency frequency) {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("from", fromInclusive)
-                .addValue("to", toInclusive);
+                .addValue("to", toInclusive)
+                .addValue("frequency", frequency.name());
 
         jdbcTemplate.update(
-                "DELETE FROM calculator_sli_daily WHERE reporting_date BETWEEN :from AND :to", params);
+                "DELETE FROM calculator_sli_daily WHERE reporting_date BETWEEN :from AND :to"
+                        + " AND frequency = :frequency", params);
 
         // Two-pass UNION:
         // Pass 1 — explicit run_number rows (capital and other cycle-specific calcs): one row per (name,freq,date,rn,dim)
@@ -78,6 +81,7 @@ public class DailyAggregateRepository {
             FROM calculator_runs
             WHERE end_time IS NOT NULL
               AND run_number IS NOT NULL
+              AND frequency = :frequency
               AND reporting_date BETWEEN :from AND :to
             GROUP BY calculator_name, frequency, reporting_date, run_number,
                      COALESCE(region, run_type, 'ALL')
@@ -107,6 +111,7 @@ public class DailyAggregateRepository {
             CROSS JOIN (VALUES ('1'), ('2')) AS rn(run_number)
             WHERE cr.end_time IS NOT NULL
               AND cr.run_number IS NULL
+              AND cr.frequency = :frequency
               AND cr.reporting_date BETWEEN :from AND :to
             GROUP BY cr.calculator_name, cr.frequency, cr.reporting_date, rn.run_number,
                      COALESCE(cr.region, cr.run_type, 'ALL')
@@ -118,7 +123,8 @@ public class DailyAggregateRepository {
             sample.stop(Timer.builder(DB_QUERY_DURATION).tag("query", "recompute_daily").register(meterRegistry));
             return inserted;
         } catch (Exception e) {
-            log.error("event=daily_aggregate.recompute outcome=failure from={} to={}", fromInclusive, toInclusive, e);
+            log.error("event=daily_aggregate.recompute outcome=failure frequency={} from={} to={}",
+                    frequency, fromInclusive, toInclusive, e);
             throw new RuntimeException("Failed to recompute daily aggregates", e);
         }
     }
@@ -422,8 +428,8 @@ public class DailyAggregateRepository {
      * {@code (:runNumber IS NULL AND run_number IS NULL)} form avoids the JDBC untyped-null pitfall.
      */
     public CalculatorProfile findRecentExactByRunNumber(String calculatorName, String frequency,
-                                                        String runNumber) {
-        return findRecentExact(calculatorName, frequency, runNumber, null);
+                                                        int days, String runNumber) {
+        return findRecentExact(calculatorName, frequency, days, runNumber, null);
     }
 
     /**
@@ -432,12 +438,12 @@ public class DailyAggregateRepository {
      * ({@code COALESCE(region, run_type, 'ALL')}).
      */
     public CalculatorProfile findRecentExactByDimension(String calculatorName, String frequency,
-                                                        String runNumber, String dimensionValue) {
-        return findRecentExact(calculatorName, frequency, runNumber, dimensionValue);
+                                                        int days, String runNumber, String dimensionValue) {
+        return findRecentExact(calculatorName, frequency, days, runNumber, dimensionValue);
     }
 
     private CalculatorProfile findRecentExact(String calculatorName, String frequency,
-                                              String runNumber, String dimensionValue) {
+                                              int days, String runNumber, String dimensionValue) {
         String dimFilter = dimensionValue != null
                 ? "AND COALESCE(region, run_type, 'ALL') = :dimensionValue\n"
                 : "";
@@ -457,7 +463,7 @@ public class DailyAggregateRepository {
                        OR run_number = :runNumber)
                   AND status = 'SUCCESS'
                   AND end_time IS NOT NULL
-                  AND reporting_date >= CURRENT_DATE - INTERVAL '90 days'
+                  AND reporting_date >= CURRENT_DATE - CAST(:days AS INTEGER) * INTERVAL '1 day'
                 ORDER BY created_at DESC
                 LIMIT 5
             ) recent
@@ -466,6 +472,7 @@ public class DailyAggregateRepository {
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("calculatorName", calculatorName)
                 .addValue("frequency", frequency)
+                .addValue("days", days)
                 .addValue("runNumber", runNumber, Types.VARCHAR);
         if (dimensionValue != null) {
             params.addValue("dimensionValue", dimensionValue);

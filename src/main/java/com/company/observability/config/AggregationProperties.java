@@ -19,8 +19,15 @@ public class AggregationProperties {
 
     private Daily daily = new Daily();
 
-    /** How many trailing reporting dates the nightly recompute covers (catches late completions). */
-    private int recomputeWindowDays = 3;
+    /**
+     * Frequency-aware trailing recompute window (write/settling time): "until when can a
+     * reporting_date's runs still change?" Sized to the completion cadence, which differs by an
+     * order of magnitude between frequencies — DAILY runs complete T+N business days after the
+     * reporting date, MONTHLY (EOM) runs execute in the first ~15 days of the following month.
+     * A single generic window cannot serve both. Distinct from {@code observability.sla.lookback}
+     * (read/relevance horizon); see the daily-aggregation spec "two-window model".
+     */
+    private RecomputeWindow recomputeWindow = new RecomputeWindow();
 
     /** TTL for cached calculator profiles. Slightly over a day so entries survive to the next nightly warm. */
     private int profileCacheTtlHours = 26;
@@ -40,5 +47,14 @@ public class AggregationProperties {
     public static class Daily {
         private boolean enabled = true;
         private String cron = "0 30 0 * * *";
+    }
+
+    @Getter
+    @Setter
+    public static class RecomputeWindow {
+        /** DAILY window: >= max T+N completion lag (T+2 over a weekend ~= 4 calendar days). */
+        private int dailyDays = 7;
+        /** MONTHLY window: sized to a next-month completion (~D+15 from EOM) with margin. */
+        private int monthlyDays = 20;
     }
 }
