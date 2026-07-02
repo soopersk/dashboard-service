@@ -99,14 +99,18 @@ public class RunIngestionService {
         Map<String, Object> additionalAttributes = request.getAdditionalAttributes();
         if (calculatorNameResolver.dimensionOf(request.getCalculatorName()) == Dimension.NONE
                 && (region != null || runType != null)) {
-            additionalAttributes = additionalAttributes != null
-                    ? new LinkedHashMap<>(additionalAttributes)
-                    : new LinkedHashMap<>();
-            if (region != null) additionalAttributes.put("region", region);
-            if (runType != null) additionalAttributes.put("run_type", runType);
-            
+            additionalAttributes = putStray(additionalAttributes, "region", region);
+            additionalAttributes = putStray(additionalAttributes, "run_type", runType);
             region = null;
             runType = null;
+        }
+
+        // Run-number-agnostic guard: a calculator not declared run-number-aware must not carry a
+        // run_number — a stray cycle label would create a phantom per-cycle profile. Collapse it to
+        // the un-numbered ('ALL') bucket but preserve the original in additional_attributes.
+        if (runNumber != null && !calculatorNameResolver.isRunNumberAware(request.getCalculatorName())) {
+            additionalAttributes = putStray(additionalAttributes, "run_number", runNumber);
+            runNumber = null;
         }
 
         // Mirrors the aggregate's COALESCE(region, run_type, 'ALL') dimension key.
@@ -345,6 +349,20 @@ public class RunIngestionService {
             }
         }
         return normalized;
+    }
+
+    /**
+     * Copy-on-write put shared by the dimension- and run-number-agnostic guards: preserves a stray
+     * label in additional_attributes. No-ops on a null value; copies the (possibly-null) source map
+     * on first real write so the request's map is never mutated in place.
+     */
+    private Map<String, Object> putStray(Map<String, Object> attributes, String key, String value) {
+        if (value == null) {
+            return attributes;
+        }
+        Map<String, Object> copy = attributes != null ? new LinkedHashMap<>(attributes) : new LinkedHashMap<>();
+        copy.put(key, value);
+        return copy;
     }
 
     /**

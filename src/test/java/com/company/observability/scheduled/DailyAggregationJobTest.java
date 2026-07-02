@@ -75,4 +75,26 @@ class DailyAggregationJobTest {
         verify(calculatorProfileService, times(4)).warm(org.mockito.ArgumentMatchers.any());
         verify(calculatorProfileService).warm(dailyDim);
     }
+
+    @Test
+    void recomputeRange_recomputesBothFrequenciesOverExplicitRange_andWarms() {
+        LocalDate from = LocalDate.of(2026, 1, 1);
+        LocalDate to = LocalDate.of(2026, 7, 1);
+
+        when(dailyAggregateRepository.recomputeForDateRange(from, to, Frequency.DAILY)).thenReturn(5);
+        when(dailyAggregateRepository.recomputeForDateRange(from, to, Frequency.MONTHLY)).thenReturn(2);
+
+        CalculatorProfile dailyBlended = new CalculatorProfile("calc-1", "DAILY", null, null, 100L, 0, 0, 10);
+        when(dailyAggregateRepository.findAllProfiles(anyString(), anyInt())).thenReturn(List.of(dailyBlended));
+        when(dailyAggregateRepository.findAllProfilesByRunNumber(anyString(), anyInt())).thenReturn(List.of());
+        when(dailyAggregateRepository.findAllProfilesByRunNumberAndDimension(anyString(), anyInt())).thenReturn(List.of());
+
+        DailyAggregationJob.RecomputeOutcome outcome = job.recomputeRange(from, to);
+
+        verify(dailyAggregateRepository).recomputeForDateRange(eq(from), eq(to), eq(Frequency.DAILY));
+        verify(dailyAggregateRepository).recomputeForDateRange(eq(from), eq(to), eq(Frequency.MONTHLY));
+        org.junit.jupiter.api.Assertions.assertEquals(7, outcome.rowsRecomputed());
+        // Two blended profiles warmed (one per frequency), no scoped/dim profiles configured above
+        org.junit.jupiter.api.Assertions.assertEquals(2, outcome.profilesWarmed());
+    }
 }

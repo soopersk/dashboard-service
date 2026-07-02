@@ -88,6 +88,11 @@ class RunIngestionServiceTest {
         org.mockito.Mockito.lenient()
                 .when(calculatorProfileService.getProfile(anyString(), any(Frequency.class), any(), any()))
                 .thenReturn(EMPTY_PROFILE);
+        // Default: treat calculators as run-number-aware so run_number-bearing tests keep their
+        // cycle label. The run-number-agnostic guard tests override this to false per name.
+        org.mockito.Mockito.lenient()
+                .when(calculatorNameResolver.isRunNumberAware(anyString()))
+                .thenReturn(true);
     }
 
     @Test
@@ -760,6 +765,67 @@ class RunIngestionServiceTest {
         // REGION archetype: region kept as the dimension, estimates routed to the AMER slice.
         verify(runRepository).upsert(argThat(run -> "AMER".equals(run.getRegion())));
         verify(calculatorProfileService).getProfile("capital", Frequency.DAILY, null, "AMER");
+    }
+
+    // ---------------------------------------------------------------
+    // Run-number-agnostic ingestion guard — non-aware calcs collapse a stray run_number to 'ALL'
+    // ---------------------------------------------------------------
+
+    @Test
+    void startRun_agnosticCalc_strayRunNumber_nulledAndPreservedInAttributes() {
+        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
+        LocalDate reportingDate = LocalDate.of(2026, 2, 20);
+        Instant start = Instant.parse("2026-02-20T05:00:00Z");
+
+        when(calculatorNameResolver.isRunNumberAware("gemini-hedge")).thenReturn(false);
+
+        StartRunRequest request = StartRunRequest.builder()
+                .runId("run-agnostic-rn").calculatorId("calc-1").calculatorName("gemini-hedge")
+                .frequency(Frequency.DAILY).reportingDate(reportingDate).startTime(start)
+                .runNumber("2")
+                .additionalAttributes(new java.util.HashMap<>(java.util.Map.of("source", "airflow")))
+                .build();
+
+        when(runRepository.findById("run-agnostic-rn", reportingDate)).thenReturn(Optional.empty());
+        when(runRepository.upsert(any(CalculatorRun.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(slaBaselineResolver.resolve(any(StartRunRequest.class), eq(Frequency.DAILY), any()))
+                .thenReturn(new SlaBaselineResolver.SlaResolution(null, null));
+
+        service.startRun(request, "tenant-1");
+
+        // run_number column nulled; original preserved in additional_attributes; pre-existing key survives.
+        verify(runRepository).upsert(argThat(run ->
+                run.getRunNumber() == null
+                        && "2".equals(run.getAdditionalAttributes().get("run_number"))
+                        && "airflow".equals(run.getAdditionalAttributes().get("source"))));
+        // Baseline profile looked up with the normalized (null) run_number.
+        verify(calculatorProfileService).getProfile("gemini-hedge", Frequency.DAILY, null);
+    }
+
+    @Test
+    void startRun_awareCalc_strayRunNumberPreserved() {
+        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
+        LocalDate reportingDate = LocalDate.of(2026, 2, 20);
+        Instant start = Instant.parse("2026-02-20T05:00:00Z");
+
+        when(calculatorNameResolver.isRunNumberAware("capital")).thenReturn(true);
+
+        StartRunRequest request = StartRunRequest.builder()
+                .runId("run-aware-rn").calculatorId("calc-1").calculatorName("capital")
+                .frequency(Frequency.DAILY).reportingDate(reportingDate).startTime(start)
+                .runNumber("2")
+                .build();
+
+        when(runRepository.findById("run-aware-rn", reportingDate)).thenReturn(Optional.empty());
+        when(runRepository.upsert(any(CalculatorRun.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(slaBaselineResolver.resolve(any(StartRunRequest.class), eq(Frequency.DAILY), any()))
+                .thenReturn(new SlaBaselineResolver.SlaResolution(null, null));
+
+        service.startRun(request, "tenant-1");
+
+        // Aware calc keeps its cycle label; baseline profile scoped by run_number "2".
+        verify(runRepository).upsert(argThat(run -> "2".equals(run.getRunNumber())));
+        verify(calculatorProfileService).getProfile("capital", Frequency.DAILY, "2");
     }
 
     // ---------------------------------------------------------------

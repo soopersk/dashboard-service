@@ -266,6 +266,76 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
     }
 
     // ---------------------------------------------------------------
+    // Single-bucket rule — un-numbered runs collapse to 'ALL' (no fan-out)
+    // ---------------------------------------------------------------
+
+    /** Un-numbered runs land in exactly one 'ALL' bucket, counted once — not fanned into '1' AND '2'. */
+    @Test
+    void recompute_unnumberedRuns_collapseToSingleAllBucket_countedOnce() {
+        insertRun("u1", "calc-U", "tenant-1", "DAILY", DATE, 300, 100L, "SUCCESS", false);
+        insertRun("u2", "calc-U", "tenant-1", "DAILY", DATE, 360, 200L, "SUCCESS", false);
+        insertRun("u3", "calc-U", "tenant-1", "DAILY", DATE, 420, 300L, "SUCCESS", false);
+
+        recomputeBoth(DATE.minusDays(1), DATE);
+
+        List<String> rns = jdbcTemplate.queryForList(
+                "SELECT run_number FROM calculator_sli_daily WHERE calculator_name = 'calc-U'", String.class);
+        assertThat(rns).containsExactly("ALL");
+
+        Integer total = jdbcTemplate.queryForObject(
+                "SELECT total_runs FROM calculator_sli_daily WHERE calculator_name = 'calc-U'", Integer.class);
+        assertThat(total).isEqualTo(3);
+
+        // Regression: blended totalRuns equals the real count. Under the old CROSS JOIN fan-out this
+        // was doubled to 6 (summed across the fabricated '1' and '2' buckets).
+        CalculatorProfile blended = repository.findProfile("calc-U", "DAILY", 3);
+        assertThat(blended.totalRuns()).isEqualTo(3);
+    }
+
+    /** Numbered runs keep their own per-cycle bucket. */
+    @Test
+    void recompute_numberedRuns_keepDistinctCycleBuckets() {
+        insertRunDim("c1", "calc-C", DATE, null, "1", 100L);
+        insertRunDim("c2", "calc-C", DATE, null, "2", 200L);
+
+        recomputeBoth(DATE.minusDays(1), DATE);
+
+        List<String> rns = jdbcTemplate.queryForList(
+                "SELECT run_number FROM calculator_sli_daily WHERE calculator_name = 'calc-C' ORDER BY run_number",
+                String.class);
+        assertThat(rns).containsExactly("1", "2");
+    }
+
+    /** The run_number-scoped warm query excludes the 'ALL' bucket (served by the blended key). */
+    @Test
+    void findAllProfilesByRunNumber_excludesAllBucket() {
+        insertRun("u1", "calc-U", "tenant-1", "DAILY", DATE, 300, 100L, "SUCCESS", false); // null rn → 'ALL'
+        insertRunDim("c1", "calc-C", DATE, null, "1", 200L);                               // rn '1'
+
+        recomputeBoth(DATE.minusDays(1), DATE);
+
+        List<CalculatorProfile> profiles = repository.findAllProfilesByRunNumber("DAILY", 3);
+
+        assertThat(profiles).extracting(CalculatorProfile::runNumber)
+                .contains("1")
+                .doesNotContain("ALL");
+    }
+
+    /** The third-tier warm query translates the 'ALL' run_number bucket back to null for the read key. */
+    @Test
+    void findAllProfilesByRunNumberAndDimension_translatesAllRunNumberToNull() {
+        insertRunDim("w1", "calc-R", DATE, "WMAP", null, 100L); // region WMAP, un-numbered → 'ALL'
+
+        recomputeBoth(DATE.minusDays(1), DATE);
+
+        List<CalculatorProfile> profiles = repository.findAllProfilesByRunNumberAndDimension("DAILY", 3);
+
+        assertThat(profiles).hasSize(1);
+        assertThat(profiles.get(0).dimensionValue()).isEqualTo("WMAP");
+        assertThat(profiles.get(0).runNumber()).isNull();
+    }
+
+    // ---------------------------------------------------------------
     // Frequency-aware recompute window (write/settling time)
     // ---------------------------------------------------------------
 

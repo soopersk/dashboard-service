@@ -87,6 +87,25 @@ public class DailyAggregationJob {
         }
     }
 
+    /**
+     * Explicit-range recompute for both frequencies over the SAME range (unlike the nightly
+     * job's per-frequency today-anchored windows). Used for dev iteration and prod go-live
+     * backfills. Exceptions propagate — an admin caller needs to see failure, unlike the
+     * scheduled job which swallows them.
+     */
+    public RecomputeOutcome recomputeRange(LocalDate from, LocalDate to) {
+        int rows = dailyAggregateRepository.recomputeForDateRange(from, to, Frequency.DAILY)
+                + dailyAggregateRepository.recomputeForDateRange(from, to, Frequency.MONTHLY);
+        long warmed = warmProfiles();
+        lastRecomputedRows.set(rows);
+        lastProfilesWarmed.set(warmed);
+        log.info("event=aggregation.recompute_range outcome=success from={} to={} rows={} warmed={}",
+                from, to, rows, warmed);
+        return new RecomputeOutcome(rows, warmed);
+    }
+
+    public record RecomputeOutcome(int rowsRecomputed, long profilesWarmed) {}
+
     private long warmProfiles() {
         long count = 0;
         for (Frequency frequency : Frequency.values()) {

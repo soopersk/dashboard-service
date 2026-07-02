@@ -32,6 +32,7 @@ class CalculatorProfileServiceTest {
     @Mock private StringRedisTemplate redisTemplate;
     @Mock private ValueOperations<String, String> valueOps;
     @Mock private DailyAggregateRepository dailyAggregateRepository;
+    @Mock private CalculatorNameResolver nameResolver;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private CalculatorProfileService service;
@@ -52,7 +53,10 @@ class CalculatorProfileServiceTest {
     void setUp() {
         service = new CalculatorProfileService(
                 redisTemplate, objectMapper, dailyAggregateRepository,
-                new SlaProperties(), new AggregationProperties(), new SimpleMeterRegistry());
+                new SlaProperties(), new AggregationProperties(), new SimpleMeterRegistry(),
+                nameResolver);
+        // "calc-1" is run-number-aware so the scoped/dim overloads keep their run_number scoping.
+        org.mockito.Mockito.lenient().when(nameResolver.isRunNumberAware("calc-1")).thenReturn(true);
     }
 
     private String json(CalculatorProfile p) {
@@ -296,5 +300,43 @@ class CalculatorProfileServiceTest {
         service.warm(dimProfile);
 
         verify(valueOps).set(eq(DIM_KEY), eq(json(dimProfile)), any(Duration.class));
+    }
+
+    // ── Archetype routing: run_number scoping is aware-only ───────────────
+
+    @Test
+    void scopedOverload_agnosticCalc_routesToBlended_notScoped() {
+        // A non-aware calc with a client-supplied run_number must serve the blended profile.
+        CalculatorProfile agBlended = new CalculatorProfile("agnostic", "DAILY", null, null, 600_000L, 300, 360, 3);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(nameResolver.isRunNumberAware("agnostic")).thenReturn(false);
+        when(valueOps.get("obs:profile:agnostic:DAILY")).thenReturn(null);
+        when(dailyAggregateRepository.findProfile("agnostic", "DAILY", 30)).thenReturn(agBlended);
+
+        CalculatorProfile result = service.getProfile("agnostic", Frequency.DAILY, "1");
+
+        assertThat(result.avgDurationMs()).isEqualTo(600_000L);
+        // Routed to the blended read — the run_number-scoped path is never touched.
+        verify(dailyAggregateRepository, never())
+                .findProfileByRunNumber(anyString(), anyString(), anyInt(), anyString());
+    }
+
+    @Test
+    void dimScopedOverload_agnosticCalc_usesNullRunNumberInKeyAndQuery() {
+        // effRn=null for a non-aware calc → …:*:{dim} key and a null-run_number aggregate query.
+        String key = "obs:profile:agnostic:DAILY:*:WMAP";
+        CalculatorProfile agDim = new CalculatorProfile("agnostic", "DAILY", null, "WMAP", 480_000L, 285, 345, 6);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(nameResolver.isRunNumberAware("agnostic")).thenReturn(false);
+        when(valueOps.get(key)).thenReturn(null);
+        when(dailyAggregateRepository.findProfileByRunNumberAndDimension("agnostic", "DAILY", 30, null, "WMAP"))
+                .thenReturn(agDim);
+
+        CalculatorProfile result = service.getProfile("agnostic", Frequency.DAILY, "1", "WMAP");
+
+        assertThat(result.avgDurationMs()).isEqualTo(480_000L);
+        verify(dailyAggregateRepository)
+                .findProfileByRunNumberAndDimension("agnostic", "DAILY", 30, null, "WMAP");
+        verify(valueOps).set(eq(key), anyString(), any(Duration.class));
     }
 }

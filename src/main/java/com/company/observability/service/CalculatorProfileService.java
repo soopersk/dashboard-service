@@ -35,6 +35,7 @@ public class CalculatorProfileService {
     private final SlaProperties slaProperties;
     private final AggregationProperties aggregationProperties;
     private final MeterRegistry meterRegistry;
+    private final CalculatorNameResolver nameResolver;
 
     private static final String PROFILE_PREFIX = "obs:profile:";
 
@@ -71,7 +72,10 @@ public class CalculatorProfileService {
      * <i>is</i> the exact slice.
      */
     public CalculatorProfile getProfile(String calculatorName, Frequency frequency, String runNumber) {
-        if (runNumber == null) {
+        // run_number is a real scoping dimension only for run-number-aware calculators. For an
+        // agnostic calc (or a null run_number) the blended profile IS the exact slice — this also
+        // defends query paths (/batch/runs placeholders) where run_number is client-supplied.
+        if (runNumber == null || !nameResolver.isRunNumberAware(calculatorName)) {
             return getProfile(calculatorName, frequency);
         }
         String key = key(calculatorName, frequency, runNumber, null);
@@ -119,7 +123,10 @@ public class CalculatorProfileService {
         if (dimensionValue == null) {
             return getProfile(calculatorName, frequency, runNumber);
         }
-        String key = key(calculatorName, frequency, runNumber, dimensionValue);
+        // Scope by run_number only for aware calcs; for an agnostic calc collapse to null so the
+        // key becomes …:*:{dim} and Tier-1/Tier-2 match the 'ALL'/raw-null rows respectively.
+        String effRn = nameResolver.isRunNumberAware(calculatorName) ? runNumber : null;
+        String key = key(calculatorName, frequency, effRn, dimensionValue);
 
         CalculatorProfile cached = readFromCache(key);
         if (cached != null) {
@@ -131,21 +138,21 @@ public class CalculatorProfileService {
         // Tier 1: exact dimension slice from the nightly aggregate.
         CalculatorProfile profile = dailyAggregateRepository.findProfileByRunNumberAndDimension(
                 calculatorName, frequency.name(), slaProperties.lookbackDays(frequency),
-                runNumber, dimensionValue);
+                effRn, dimensionValue);
         if (profile.totalRuns() > 0) {
             return cacheAndReturn(key, tagAggregateConfidence(profile));
         }
 
         // Tier 2: last raw runs for the exact dimension slice.
         CalculatorProfile recent = dailyAggregateRepository.findRecentExactByDimension(
-                calculatorName, frequency.name(), slaProperties.lookbackDays(frequency), runNumber, dimensionValue);
+                calculatorName, frequency.name(), slaProperties.lookbackDays(frequency), effRn, dimensionValue);
         if (recent.totalRuns() > 0) {
             return cacheAndReturn(key, recent.withConfidence(CalculatorProfile.ProfileConfidence.RECENT_EXACT));
         }
 
         // Both tiers missed — zero-sample sentinel (cached briefly).
         return cacheAndReturn(key, CalculatorProfile.fromSums(
-                calculatorName, frequency.name(), runNumber, dimensionValue, 0, 0, 0, 0));
+                calculatorName, frequency.name(), effRn, dimensionValue, 0, 0, 0, 0));
     }
 
     /** EXACT when the exact slice has enough samples, SPARSE_EXACT when it has 1..(min-1). */

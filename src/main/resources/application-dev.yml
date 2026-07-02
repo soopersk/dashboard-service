@@ -5,8 +5,11 @@ logging:
     org.hibernate.SQL: DEBUG
 
 observability:
+  aggregation:
+    recompute-window: { daily-days: 400, monthly-days: 400 }
   sla:
     allow-reference-time: true
+    lookback: { daily-days: 400, monthly-days: 400 }
   calculator:
     aliases:
       capital: [capitalcalcdev]

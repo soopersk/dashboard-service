@@ -50,18 +50,20 @@ public class DailyAggregateRepository {
                 "DELETE FROM calculator_sli_daily WHERE reporting_date BETWEEN :from AND :to"
                         + " AND frequency = :frequency", params);
 
-        // Two-pass UNION:
-        // Pass 1 — explicit run_number rows (capital and other cycle-specific calcs): one row per (name,freq,date,rn,dim)
-        // Pass 2 — null-run_number rows (modelled-exposure, gemini-hedge): fanned into BOTH '1' AND '2' buckets
+        // Single-pass, single-bucket rule: run_number is a real dimension only for
+        // run-number-aware calculators. Every run lands in EXACTLY ONE bucket — numbered runs
+        // keep their cycle ('1','2',…); un-numbered runs collapse to the canonical 'ALL' bucket
+        // (mirroring the dimension_value = 'ALL' sentinel). Each run is counted once — no fan-out,
+        // no double-count. Reads route by classification (aware → cycle slice, agnostic → 'ALL').
         String insert = """
             INSERT INTO calculator_sli_daily (
                 calculator_name, frequency, reporting_date, run_number, dimension_value,
                 total_runs, success_runs, sla_breaches,
                 sum_duration_ms, sum_start_min_utc, sum_end_min_utc, computed_at
             )
-            -- Pass 1: explicit run_number rows
             SELECT
-                calculator_name, frequency, reporting_date, run_number,
+                calculator_name, frequency, reporting_date,
+                COALESCE(run_number, 'ALL') AS run_number,
                 COALESCE(region, run_type, 'ALL') AS dimension_value,
                 COUNT(*),
                 COUNT(*) FILTER (WHERE status = 'SUCCESS'),
@@ -80,41 +82,11 @@ public class DailyAggregateRepository {
                 NOW()
             FROM calculator_runs
             WHERE end_time IS NOT NULL
-              AND run_number IS NOT NULL
               AND frequency = :frequency
               AND reporting_date BETWEEN :from AND :to
-            GROUP BY calculator_name, frequency, reporting_date, run_number,
+            GROUP BY calculator_name, frequency, reporting_date,
+                     COALESCE(run_number, 'ALL'),
                      COALESCE(region, run_type, 'ALL')
-
-            UNION ALL
-
-            -- Pass 2: null-run_number rows — fan out into both '1' and '2' buckets
-            SELECT
-                cr.calculator_name, cr.frequency, cr.reporting_date, rn.run_number,
-                COALESCE(cr.region, cr.run_type, 'ALL') AS dimension_value,
-                COUNT(*),
-                COUNT(*) FILTER (WHERE cr.status = 'SUCCESS'),
-                COUNT(*) FILTER (WHERE cr.sla_breached),
-                COALESCE(SUM(cr.duration_ms), 0),
-                COALESCE(SUM(
-                    EXTRACT(HOUR   FROM cr.start_time AT TIME ZONE 'UTC') * 60 +
-                    EXTRACT(MINUTE FROM cr.start_time AT TIME ZONE 'UTC')
-                ), 0),
-                COALESCE(SUM(
-                    CASE WHEN cr.end_time IS NOT NULL THEN
-                        EXTRACT(HOUR   FROM cr.end_time AT TIME ZONE 'UTC') * 60 +
-                        EXTRACT(MINUTE FROM cr.end_time AT TIME ZONE 'UTC')
-                    ELSE 0 END
-                ), 0),
-                NOW()
-            FROM calculator_runs cr
-            CROSS JOIN (VALUES ('1'), ('2')) AS rn(run_number)
-            WHERE cr.end_time IS NOT NULL
-              AND cr.run_number IS NULL
-              AND cr.frequency = :frequency
-              AND cr.reporting_date BETWEEN :from AND :to
-            GROUP BY cr.calculator_name, cr.frequency, cr.reporting_date, rn.run_number,
-                     COALESCE(cr.region, cr.run_type, 'ALL')
             """;
 
         try {
@@ -277,6 +249,8 @@ public class DailyAggregateRepository {
     /**
      * Per-run_number profiles for all active calculators. Used by the nightly job to warm
      * run_number-scoped cache keys ({@code obs:profile:{name}:{freq}:{runNumber}}).
+     * Excludes the 'ALL' bucket — un-numbered runs are already served by the blended key
+     * that {@link #findAllProfiles} warms (mirrors the {@code dimension_value <> 'ALL'} filter).
      */
     public List<CalculatorProfile> findAllProfilesByRunNumber(String frequency, int days) {
         String sql = """
@@ -287,6 +261,7 @@ public class DailyAggregateRepository {
                    SUM(total_runs)        AS total_runs
             FROM calculator_sli_daily
             WHERE frequency = :frequency
+            AND run_number <> 'ALL'
             AND reporting_date >= CURRENT_DATE - CAST(:days AS INTEGER) * INTERVAL '1 day'
             GROUP BY calculator_name, run_number
             """;
@@ -406,11 +381,17 @@ public class DailyAggregateRepository {
                 .addValue("days", days);
 
         try {
-            return jdbcTemplate.query(sql, params, (rs, rowNum) -> CalculatorProfile.fromSums(
-                    rs.getString("calculator_name"), frequency, rs.getString("run_number"),
-                    rs.getString("dimension_value"),
-                    rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"),
-                    rs.getLong("sum_end_min_utc"), rs.getInt("total_runs")));
+            return jdbcTemplate.query(sql, params, (rs, rowNum) -> {
+                // Translate the 'ALL' un-numbered bucket back to null so an agnostic dim slice
+                // warms under the …:*:{dim} key the routed read looks up. Aware calcs keep '1'/'2'.
+                String rn = rs.getString("run_number");
+                rn = "ALL".equals(rn) ? null : rn;
+                return CalculatorProfile.fromSums(
+                        rs.getString("calculator_name"), frequency, rn,
+                        rs.getString("dimension_value"),
+                        rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"),
+                        rs.getLong("sum_end_min_utc"), rs.getInt("total_runs"));
+            });
         } catch (Exception e) {
             log.error("event=daily_aggregate.find_all_profiles_by_dim outcome=failure frequency={}", frequency, e);
             return Collections.emptyList();
