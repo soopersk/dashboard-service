@@ -5,6 +5,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.QueryTimeoutException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -108,13 +114,11 @@ public class GlobalExceptionHandler {
             errors.put(error.getField(), error.getDefaultMessage())
         );
 
-        Map<String, Object> response = new HashMap<>();
-        response.put("timestamp", Instant.now());
-        response.put("status", HttpStatus.BAD_REQUEST.value());
+        Map<String, Object> response = baseErrorBody(status);
         response.put("error", "Validation Failed");
         response.put("errors", errors);
 
-        return ResponseEntity.badRequest().body(response);
+        return ResponseEntity.status(status).body(response);
     }
 
     @ExceptionHandler(ConstraintViolationException.class)
@@ -123,6 +127,54 @@ public class GlobalExceptionHandler {
         meterRegistry.counter(API_ERROR, "exception", ex.getClass().getSimpleName(), "status", String.valueOf(status.value())).increment();
         log.warn("event=api.error status={} exception={} message={}", status.value(), ex.getClass().getSimpleName(), ex.getMessage());
         return buildErrorResponse(status, ex.getMessage());
+    }
+
+    /**
+     * Constraint / NOT NULL / CHECK violation — a client-data problem, so 400. The Postgres
+     * message names the offending column/constraint; safe to surface to an internal Airflow caller
+     * (same pattern as {@link #handleUnreadableBody}).
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        HttpStatus status = HttpStatus.BAD_REQUEST;
+        meterRegistry.counter(API_ERROR, "exception", ex.getClass().getSimpleName(), "status", String.valueOf(status.value())).increment();
+        String message = ex.getMostSpecificCause().getMessage();
+        log.warn("event=api.error status={} exception={} message={}", status.value(), ex.getClass().getSimpleName(), message);
+        return buildErrorResponse(status, message);
+    }
+
+    /**
+     * Lock contention / statement timeout / other transient failures — retryable, so 503.
+     */
+    @ExceptionHandler({CannotAcquireLockException.class, QueryTimeoutException.class, TransientDataAccessException.class})
+    public ResponseEntity<Map<String, Object>> handleTransientDataAccess(DataAccessException ex) {
+        HttpStatus status = HttpStatus.SERVICE_UNAVAILABLE;
+        meterRegistry.counter(API_ERROR, "exception", ex.getClass().getSimpleName(), "status", String.valueOf(status.value())).increment();
+        log.warn("event=api.error status={} exception={} message={}", status.value(), ex.getClass().getSimpleName(), ex.getMessage());
+        return buildErrorResponse(status, "Temporary database contention — retry the request.");
+    }
+
+    /**
+     * Catch-all for the {@code DataAccessException} family (connectivity etc.) — retryable, so 503.
+     */
+    @ExceptionHandler(DataAccessException.class)
+    public ResponseEntity<Map<String, Object>> handleDataAccess(DataAccessException ex) {
+        HttpStatus status = HttpStatus.SERVICE_UNAVAILABLE;
+        meterRegistry.counter(API_ERROR, "exception", ex.getClass().getSimpleName(), "status", String.valueOf(status.value())).increment();
+        log.error("event=api.error status={} exception={} message={}", status.value(), ex.getClass().getSimpleName(), ex.getMessage(), ex);
+        return buildErrorResponse(status, "Database temporarily unavailable — retry the request.");
+    }
+
+    /**
+     * Genuinely-unexpected persistence failure (non-{@code DataAccessException}) — 500, but typed
+     * and distinguishable in logs/metrics from framework-level 500s.
+     */
+    @ExceptionHandler(PersistenceFailureException.class)
+    public ResponseEntity<Map<String, Object>> handlePersistenceFailure(PersistenceFailureException ex, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.INTERNAL_SERVER_ERROR;
+        meterRegistry.counter(API_ERROR, "exception", ex.getClass().getSimpleName(), "status", String.valueOf(status.value())).increment();
+        log.error("event=api.error status={} exception={} method={} uri={}", status.value(), ex.getClass().getSimpleName(), request.getMethod(), request.getRequestURI(), ex);
+        return buildErrorResponse(status, "An unexpected error occurred while saving the run");
     }
 
     @ExceptionHandler(Exception.class)
@@ -134,12 +186,25 @@ public class GlobalExceptionHandler {
     }
 
     private ResponseEntity<Map<String, Object>> buildErrorResponse(HttpStatus status, String message) {
+        Map<String, Object> response = baseErrorBody(status);
+        response.put("message", message);
+        return ResponseEntity.status(status).body(response);
+    }
+
+    /**
+     * Common error-body scaffold: {@code timestamp}, {@code status}, {@code error} (reason phrase),
+     * and {@code requestId} (the per-request id set by {@code RequestLoggingFilter}; key omitted when
+     * MDC has none, e.g. direct unit-test invocation). Callers add {@code message}/{@code errors}.
+     */
+    private Map<String, Object> baseErrorBody(HttpStatus status) {
         Map<String, Object> response = new HashMap<>();
         response.put("timestamp", Instant.now());
         response.put("status", status.value());
         response.put("error", status.getReasonPhrase());
-        response.put("message", message);
-
-        return ResponseEntity.status(status).body(response);
+        String requestId = MDC.get("requestId");
+        if (requestId != null) {
+            response.put("requestId", requestId);
+        }
+        return response;
     }
 }

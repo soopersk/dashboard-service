@@ -297,6 +297,63 @@ class RunIngestionControllerTest {
     }
 
     @Test
+    void startRun_whenServiceThrowsDataIntegrityViolation_returnsBadRequest() throws Exception {
+        when(ingestionService.startRun(any(), eq("tenant-a")))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "wrapper", new RuntimeException("value too long for column calculator_name")));
+
+        String payload = """
+                {
+                  "runId": "run-1",
+                  "calculatorId": "calc-1",
+                  "calculatorName": "Calculator One",
+                  "frequency": "DAILY",
+                  "reportingDate": "2026-02-22",
+                  "startTime": "2026-02-22T06:00:00Z",
+                  "slaTime": "PT2H30M"
+                }
+                """;
+
+        mockMvc.perform(post("/api/v1/runs/start")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(TENANT_HEADER, "tenant-a")
+                        .content(payload))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").value("value too long for column calculator_name"));
+
+        verify(ingestionService).startRun(any(), eq("tenant-a"));
+    }
+
+    @Test
+    void startRun_whenServiceThrowsLockContention_returnsServiceUnavailable() throws Exception {
+        when(ingestionService.startRun(any(), eq("tenant-a")))
+                .thenThrow(new org.springframework.dao.CannotAcquireLockException("lock timeout"));
+
+        String payload = """
+                {
+                  "runId": "run-1",
+                  "calculatorId": "calc-1",
+                  "calculatorName": "Calculator One",
+                  "frequency": "DAILY",
+                  "reportingDate": "2026-02-22",
+                  "startTime": "2026-02-22T06:00:00Z",
+                  "slaTime": "PT2H30M"
+                }
+                """;
+
+        mockMvc.perform(post("/api/v1/runs/start")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(TENANT_HEADER, "tenant-a")
+                        .content(payload))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("Service Unavailable"))
+                .andExpect(jsonPath("$.message").value("Temporary database contention — retry the request."));
+
+        verify(ingestionService).startRun(any(), eq("tenant-a"));
+    }
+
+    @Test
     void startRun_missingTenantIdHeader_succeedsWithNullTenant() throws Exception {
         CalculatorRun savedRun = CalculatorRun.builder()
                 .runId("run-1")

@@ -23,6 +23,8 @@ public final class ObservabilityConstants {
     public static final String INGESTION_RUN_COMPLETED = "obs.ingestion.run.completed";
     public static final String INGESTION_RUN_DUPLICATE = "obs.ingestion.run.duplicate";
     public static final String INGESTION_RUN_ACTIVE = "obs.ingestion.run.active";
+    public static final String INGESTION_JSONB_WRITE_FAILURE = "obs.ingestion.jsonb.write_failure";
+    public static final String INGESTION_JSONB_READ_FAILURE = "obs.ingestion.jsonb.read_failure";
 
     // ================================================================
     // Query layer (RunQueryService)

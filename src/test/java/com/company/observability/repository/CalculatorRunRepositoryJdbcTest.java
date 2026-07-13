@@ -6,6 +6,7 @@ import com.company.observability.domain.RunWithSlaStatus;
 import com.company.observability.domain.enums.Frequency;
 import com.company.observability.domain.enums.SlaBand;
 import com.company.observability.util.JsonbConverter;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -36,6 +37,9 @@ class CalculatorRunRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private JsonbConverter jsonbConverter;
+
     @TestConfiguration
     static class TestBeans {
         @Bean
@@ -53,6 +57,42 @@ class CalculatorRunRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
     void clean() {
         jdbcTemplate.update("TRUNCATE TABLE sla_breach_events RESTART IDENTITY");
         jdbcTemplate.update("TRUNCATE TABLE calculator_runs CASCADE");
+    }
+
+    @AfterEach
+    void resetJsonbConverter() {
+        // Some tests stub the shared JsonbConverter mock; reset so stubs don't leak across tests.
+        Mockito.reset(jsonbConverter);
+    }
+
+    // ---------------------------------------------------------------
+    // safeFromJsonb — a corrupted/unmappable JSONB value degrades that one
+    // field to null instead of failing the whole query result set
+    // ---------------------------------------------------------------
+
+    @Test
+    void findById_whenJsonbDeserializeThrows_degradesFieldToNull_notWholeRow() {
+        LocalDate date = LocalDate.of(2026, 6, 15);
+        Instant start = Instant.parse("2026-06-15T05:00:00Z");
+        jdbcTemplate.update("""
+            INSERT INTO calculator_runs (
+                run_id, calculator_id, calculator_name, tenant_id, frequency, reporting_date,
+                start_time, status, sla_band, run_parameters, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?::jsonb, ?, ?)
+            """,
+                "run-corrupt", "calc-1", "Calculator 1", "tenant-1", "DAILY", date,
+                Timestamp.from(start), "RUNNING", "{\"k\":\"v\"}",
+                Timestamp.from(start), Timestamp.from(start));
+
+        Mockito.when(jsonbConverter.fromJsonb(Mockito.any()))
+                .thenThrow(new IllegalArgumentException("deserialize boom"));
+
+        // findById(String) maps JSONB (includeJsonb=true) — must not propagate the exception.
+        Optional<CalculatorRun> run = repository.findById("run-corrupt");
+
+        assertThat(run).isPresent();
+        assertThat(run.get().getRunId()).isEqualTo("run-corrupt");
+        assertThat(run.get().getRunParameters()).isNull(); // degraded, not thrown
     }
 
     @Test

@@ -6,17 +6,20 @@ import com.company.observability.domain.RunWithSlaStatus;
 import com.company.observability.domain.enums.Frequency;
 import com.company.observability.domain.enums.RunStatus;
 import com.company.observability.domain.enums.SlaBand;
+import com.company.observability.exception.PersistenceFailureException;
 import com.company.observability.util.JsonbConverter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.support.DataAccessUtils;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.EmptySqlParameterSource;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import org.postgresql.util.PGobject;
 
 import java.sql.*;
 import java.time.*;
@@ -124,8 +127,8 @@ public class CalculatorRunRepository {
                 .addValue("runType", run.getRunType())
                 .addValue("region", run.getRegion())
                 .addValue("correlationId", run.getCorrelationId())
-                .addValue("runParameters", jsonbConverter.toJsonb(run.getRunParameters()))
-                .addValue("additionalAttributes", jsonbConverter.toJsonb(run.getAdditionalAttributes()))
+                .addValue("runParameters", safeToJsonb("run_parameters", run.getRunId(), run.getRunParameters()))
+                .addValue("additionalAttributes", safeToJsonb("additional_attributes", run.getRunId(), run.getAdditionalAttributes()))
                 .addValue("createdAt", Timestamp.from(run.getCreatedAt()))
                 .addValue("updatedAt", Timestamp.from(run.getUpdatedAt()));
 
@@ -150,10 +153,57 @@ public class CalculatorRunRepository {
 
             return savedRun;
 
+        } catch (DataAccessException dae) {
+            log.error("event=run.upsert outcome=failure run_id={}", run.getRunId(), dae);
+            throw dae; // rethrow unwrapped so GlobalExceptionHandler can classify by exact subtype
         } catch (Exception e) {
             log.error("event=run.upsert outcome=failure run_id={}", run.getRunId(), e);
-            throw new RuntimeException("Failed to save calculator run", e);
+            throw new PersistenceFailureException("Failed to save calculator run", e);
         }
+    }
+
+    /**
+     * Serialize a JSONB field defensively: a conversion failure degrades that one field to a
+     * typed SQL {@code null} (plus a warning + metric) rather than aborting the whole insert.
+     */
+    private PGobject safeToJsonb(String field, String runId, Map<String, Object> map) {
+        try {
+            return jsonbConverter.toJsonb(map);
+        } catch (Exception e) {
+            log.warn("event=run.upsert.jsonb outcome=degraded field={} run_id={} error={}", field, runId, e.getMessage());
+            meterRegistry.counter(INGESTION_JSONB_WRITE_FAILURE, "field", field).increment();
+            return nullJsonb();
+        }
+    }
+
+    /**
+     * Deserialize a JSONB field defensively: a corrupted value degrades that one field to
+     * {@code null} (plus a warning + metric) rather than failing the entire query result set.
+     */
+    private Map<String, Object> safeFromJsonb(String field, String runId, Object dbValue) {
+        try {
+            return jsonbConverter.fromJsonb(dbValue);
+        } catch (Exception e) {
+            log.warn("event=run.map.jsonb outcome=degraded field={} run_id={} error={}", field, runId, e.getMessage());
+            meterRegistry.counter(INGESTION_JSONB_READ_FAILURE, "field", field).increment();
+            return null;
+        }
+    }
+
+    /**
+     * A typed {@code jsonb} {@link PGobject} carrying a SQL null — mirrors what
+     * {@code JsonbConverter.toJsonb(null)} produces, keeping NamedParameterJdbcTemplate binding
+     * consistent (avoids passing an untyped Java {@code null}).
+     */
+    private PGobject nullJsonb() {
+        PGobject pg = new PGobject();
+        pg.setType("jsonb");
+        try {
+            pg.setValue(null);
+        } catch (SQLException ignored) {
+            // PGobject.setValue never throws for a jsonb type with a null value
+        }
+        return pg;
     }
 
     /**
@@ -553,8 +603,8 @@ public class CalculatorRunRepository {
                         .updatedAt(fromTimestamp(rs.getTimestamp("updated_at")));
 
                 if (includeJsonb) {
-                    builder.runParameters(jsonbConverter.fromJsonb(rs.getObject("run_parameters")))
-                           .additionalAttributes(jsonbConverter.fromJsonb(rs.getObject("additional_attributes")));
+                    builder.runParameters(safeFromJsonb("run_parameters", rs.getString("run_id"), rs.getObject("run_parameters")))
+                           .additionalAttributes(safeFromJsonb("additional_attributes", rs.getString("run_id"), rs.getObject("additional_attributes")));
                 }
 
                 return builder.build();
