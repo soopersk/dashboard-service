@@ -93,4 +93,9 @@ public record CalculatorProfile(
     public boolean hasSufficientSamples(int minSampleSize) {
         return totalRuns >= minSampleSize && avgDurationMs > 0;
     }
+
+    /** Any real history at all — the bar for *displaying* an estimate, not for SLA grading. */
+    public boolean hasAnySample() {
+        return totalRuns > 0 && avgDurationMs > 0;
+    }
 }

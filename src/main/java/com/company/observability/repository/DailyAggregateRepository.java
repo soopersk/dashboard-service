@@ -423,6 +423,17 @@ public class DailyAggregateRepository {
         return findRecentExact(calculatorName, frequency, days, runNumber, dimensionValue);
     }
 
+    /**
+     * Tier-2 fallback for the blended (2-arg, doubly-agnostic) profile: aggregates the last 5
+     * completed {@code SUCCESS} runs for the calculator+frequency straight from
+     * {@code calculator_runs}, ignoring run_number and dimension. Used only when
+     * {@code calculator_sli_daily} has no matching row (e.g. a freshly-onboarded calculator before
+     * the first nightly recompute). Returns a zero-sample sentinel when no recent run exists.
+     */
+    public CalculatorProfile findRecentExactBlended(String calculatorName, String frequency, int days) {
+        return findRecentExact(calculatorName, frequency, days, null, null);
+    }
+
     private CalculatorProfile findRecentExact(String calculatorName, String frequency,
                                               int days, String runNumber, String dimensionValue) {
         String dimFilter = dimensionValue != null

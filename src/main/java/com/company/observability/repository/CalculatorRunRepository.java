@@ -494,10 +494,12 @@ public class CalculatorRunRepository {
     }
 
     /**
-     * Returns the most recent run with a non-null {@code expected_duration_ms} for the given
+     * Returns the most recent run with a non-null {@code estimated_end_time} for the given
      * calculator name and frequency within the trailing {@code lookbackDays} window. Used as a
      * fallback estimator when {@code CalculatorProfile} has insufficient samples
-     * (new/infrequent calculators).
+     * (new/infrequent calculators). {@code estimated_end_time} is leniently populated (set on
+     * every run with any history to draw from), unlike the minSampleSize-gated
+     * {@code expected_duration_ms}, so this returns a row for thin-history calculators too.
      *
      * <p>The {@code reporting_date} bound exists for partition pruning — without it this query
      * probes every partition (~455). Callers pass {@code SlaProperties.lookbackDays(frequency)}
@@ -521,7 +523,7 @@ public class CalculatorRunRepository {
         String sql = SELECT_BASE + """
             WHERE calculator_name = :calculatorName
               AND frequency = :frequency
-              AND expected_duration_ms IS NOT NULL
+              AND estimated_end_time IS NOT NULL
               AND reporting_date >= CURRENT_DATE - CAST(:lookbackDays AS INTEGER) * INTERVAL '1 day'
             """
             + (scoped ? "  AND run_number = :runNumber\n" : "")

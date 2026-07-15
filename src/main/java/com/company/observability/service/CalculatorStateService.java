@@ -177,7 +177,7 @@ public class CalculatorStateService {
         Long expectedMs = null;
         String calculatorId = null;
 
-        if (profile.hasSufficientSamples(slaProperties.getMinSampleSize())) {
+        if (profile.hasAnySample()) {
             estStart = TimeUtils.instantFromUtcMinuteOfDay(executionDate, profile.avgStartMinUtc());
             estEnd = estStart.plusMillis(profile.avgDurationMs());
             expectedMs = profile.avgDurationMs();
@@ -192,15 +192,20 @@ public class CalculatorStateService {
             calculatorId = latest.getCalculatorId();
         }
 
-        // 1b. Fallback estimates from most recent run's stored values, projected onto execution date
+        // 1b. Fallback estimates from most recent run's stored values, projected onto execution date.
+        // Uses the leniently-populated estimated start/end pair (the same fields resolveEstimatedStart/
+        // resolveEstimatedEnd write on every run), not the strictly-gated expectedDurationMs — so a
+        // thin-history calculator still gets an estimate here.
         if (estStart == null && latest != null
-                && latest.getEstimatedStartTime() != null && latest.getExpectedDurationMs() != null) {
+                && latest.getEstimatedStartTime() != null && latest.getEstimatedEndTime() != null) {
+            long impliedMs = Duration.between(
+                    latest.getEstimatedStartTime(), latest.getEstimatedEndTime()).toMillis();
             int minuteOfDay = (int) Duration.between(
                     latest.getEstimatedStartTime().truncatedTo(ChronoUnit.DAYS),
                     latest.getEstimatedStartTime()).toMinutes();
             estStart = TimeUtils.instantFromUtcMinuteOfDay(executionDate, minuteOfDay);
-            estEnd = estStart.plusMillis(latest.getExpectedDurationMs());
-            expectedMs = latest.getExpectedDurationMs();
+            estEnd = estStart.plusMillis(impliedMs);
+            expectedMs = impliedMs;
             calculatorId = latest.getCalculatorId();
             log.debug("event=batch_runs.not_started source=latest_run calculator={} date={} executionDate={} " +
                       "estStart={} estEnd={} expectedMs={}",

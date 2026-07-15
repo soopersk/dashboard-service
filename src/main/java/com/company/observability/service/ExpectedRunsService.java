@@ -169,7 +169,7 @@ public class ExpectedRunsService {
         Long expectedMs = null;
 
         CalculatorProfile dimProfile = profileService.getProfile(realName, frequency, runNumber, dimValue);
-        if (dimProfile.hasSufficientSamples(slaProps.getMinSampleSize())) {
+        if (dimProfile.hasAnySample()) {
             estStart = TimeUtils.instantFromUtcMinuteOfDay(executionDate, dimProfile.avgStartMinUtc());
             estEnd = estStart.plusMillis(dimProfile.avgDurationMs());
             expectedMs = dimProfile.avgDurationMs();
@@ -182,7 +182,7 @@ public class ExpectedRunsService {
         SlaEval eval = evaluateSlaStatus(calculatorDeadline, slaProps.bandGapMs(), clock.instant());
         log.debug("event=batch_runs.placeholder calculator={} dimension={} source={} estStart={} estEnd={} deadline={} slaStatus={}",
                 realName, dimValue,
-                dimProfile.hasSufficientSamples(slaProps.getMinSampleSize()) ? "dim_profile" : "template",
+                dimProfile.hasAnySample() ? "dim_profile" : "template",
                 estStart, estEnd, calculatorDeadline, eval.slaStatus());
 
         return RunEntry.builder()

@@ -89,19 +89,47 @@ class CalculatorProfileServiceTest {
         CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY);
 
         assertThat(result.avgDurationMs()).isEqualTo(600_000L);
-        verify(valueOps).set(eq(BLENDED_KEY), eq(json(blended)), eq(Duration.ofHours(26)));
+        assertThat(result.confidence()).isEqualTo(CalculatorProfile.ProfileConfidence.EXACT);
+        verify(valueOps).set(eq(BLENDED_KEY),
+                eq(json(blended.withConfidence(CalculatorProfile.ProfileConfidence.EXACT))),
+                eq(Duration.ofHours(26)));
+        // Tier 1 has samples — Tier 2 is not consulted.
+        verify(dailyAggregateRepository, never()).findRecentExactBlended(anyString(), anyString(), anyInt());
     }
 
     @Test
-    void emptyProfile_cachedWithShortTtl() {
+    void tier1Empty_fallsToTier2RecentExact() {
+        CalculatorProfile empty = new CalculatorProfile("calc-1", "DAILY", null, null, 0, 0, 0, 0);
+        CalculatorProfile recent = new CalculatorProfile("calc-1", "DAILY", null, null, 520_000L, 296, 356, 4);
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.get(BLENDED_KEY)).thenReturn(null);
+        when(dailyAggregateRepository.findProfile("calc-1", "DAILY", 30)).thenReturn(empty);
+        when(dailyAggregateRepository.findRecentExactBlended("calc-1", "DAILY", 30)).thenReturn(recent);
+
+        CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY);
+
+        assertThat(result.avgDurationMs()).isEqualTo(520_000L);
+        assertThat(result.confidence()).isEqualTo(CalculatorProfile.ProfileConfidence.RECENT_EXACT);
+        verify(valueOps).set(eq(BLENDED_KEY),
+                eq(json(recent.withConfidence(CalculatorProfile.ProfileConfidence.RECENT_EXACT))),
+                eq(Duration.ofHours(4)));
+    }
+
+    @Test
+    void bothTiersMiss_returnsSentinel_notNull() {
         CalculatorProfile empty = new CalculatorProfile("calc-1", "DAILY", null, null, 0, 0, 0, 0);
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
         when(valueOps.get(BLENDED_KEY)).thenReturn(null);
         when(dailyAggregateRepository.findProfile("calc-1", "DAILY", 30)).thenReturn(empty);
+        when(dailyAggregateRepository.findRecentExactBlended("calc-1", "DAILY", 30)).thenReturn(empty);
 
-        service.getProfile("calc-1", Frequency.DAILY);
+        CalculatorProfile result = service.getProfile("calc-1", Frequency.DAILY);
 
-        verify(valueOps).set(eq(BLENDED_KEY), eq(json(empty)), eq(Duration.ofMinutes(60)));
+        assertThat(result).isNotNull();
+        assertThat(result.totalRuns()).isZero();
+        assertThat(result.hasAnySample()).isFalse();
+        assertThat(result.confidence()).isNull();
+        verify(valueOps).set(eq(BLENDED_KEY), anyString(), eq(Duration.ofMinutes(60)));
     }
 
     @Test

@@ -39,7 +39,17 @@ public class CalculatorProfileService {
 
     private static final String PROFILE_PREFIX = "obs:profile:";
 
-    /** Cache-aside read. Never throws; falls back to a DB read (and a zero-sample profile on error). */
+    /**
+     * Cache-aside read of the blended (doubly-agnostic) profile. Never throws; falls back to a DB
+     * read (and a zero-sample profile on error).
+     *
+     * <p>Two tiers, mirroring the run_number/dimension overloads: the blended aggregate slice from
+     * {@code calculator_sli_daily} (Tier 1), then — only when that slice has <b>zero</b> history —
+     * the last few raw runs from {@code calculator_runs} (Tier 2, RECENT_EXACT). This gives a
+     * brand-new fully-agnostic calculator the same "last N raw runs" guarantee that run-number-aware
+     * and dimension-aware calculators already get. When both tiers miss, a zero-sample sentinel is
+     * returned (never null).
+     */
     public CalculatorProfile getProfile(String calculatorName, Frequency frequency) {
         String key = key(calculatorName, frequency, null, null);
 
@@ -50,10 +60,23 @@ public class CalculatorProfileService {
         }
         meterRegistry.counter("obs.profile.cache", "result", "miss").increment();
 
+        // Tier 1: blended aggregate slice from the nightly aggregate.
         CalculatorProfile profile = dailyAggregateRepository.findProfile(
                 calculatorName, frequency.name(), slaProperties.lookbackDays(frequency));
-        writeToCache(key, profile);
-        return profile;
+        if (profile.totalRuns() > 0) {
+            return cacheAndReturn(key, tagAggregateConfidence(profile));
+        }
+
+        // Tier 2: last raw runs (blended, no run_number/dimension scope).
+        CalculatorProfile recent = dailyAggregateRepository.findRecentExactBlended(
+                calculatorName, frequency.name(), slaProperties.lookbackDays(frequency));
+        if (recent.totalRuns() > 0) {
+            return cacheAndReturn(key, recent.withConfidence(CalculatorProfile.ProfileConfidence.RECENT_EXACT));
+        }
+
+        // Both tiers missed — zero-sample sentinel (cached briefly).
+        return cacheAndReturn(key, CalculatorProfile.fromSums(
+                calculatorName, frequency.name(), null, null, 0, 0, 0, 0));
     }
 
     /**
