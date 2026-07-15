@@ -64,17 +64,19 @@ class RunIngestionServiceTest {
             new CalculatorProfile("Calculator 1", "DAILY", null, null, 0, 0, 0, 0);
 
     private SlaProperties slaProperties;
+    private SimpleMeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
         slaProperties = new SlaProperties();
+        meterRegistry = new SimpleMeterRegistry();
         service = new RunIngestionService(
                 runRepository,
                 slaEvaluationService,
                 slaBaselineResolver,
                 calculatorProfileService,
                 eventPublisher,
-                new SimpleMeterRegistry(),
+                meterRegistry,
                 slaMonitoringCache,
                 new com.company.observability.logging.LifecycleLogger(),
                 slaProperties,
@@ -684,6 +686,8 @@ class RunIngestionServiceTest {
                 .runNumber("1").region("WMAP")
                 .build();
 
+        when(calculatorNameResolver.dimensionOf("Calculator 1")).thenReturn(Dimension.REGION);
+
         CalculatorProfile rnProfile = new CalculatorProfile("Calculator 1", "DAILY", "1", null, 3_600_000L, 270, 330, 10);
         CalculatorProfile dimProfile = new CalculatorProfile("Calculator 1", "DAILY", "1", "WMAP", 1_800_000L, 300, 330, 10);
         when(calculatorProfileService.getProfile("Calculator 1", Frequency.DAILY, "1")).thenReturn(rnProfile);
@@ -765,6 +769,100 @@ class RunIngestionServiceTest {
         // REGION archetype: region kept as the dimension, estimates routed to the AMER slice.
         verify(runRepository).upsert(argThat(run -> "AMER".equals(run.getRegion())));
         verify(calculatorProfileService).getProfile("capital", Frequency.DAILY, null, "AMER");
+    }
+
+    @Test
+    void startRun_runTypeCalc_strayRegionNoRunType_collapsedAndMissingCounter() {
+        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
+        LocalDate reportingDate = LocalDate.of(2026, 2, 20);
+        Instant start = Instant.parse("2026-02-20T05:00:00Z");
+
+        when(calculatorNameResolver.dimensionOf("modelled-exposure")).thenReturn(Dimension.RUN_TYPE);
+
+        StartRunRequest request = StartRunRequest.builder()
+                .runId("run-rt-stray").calculatorId("calc-1").calculatorName("modelled-exposure")
+                .frequency(Frequency.DAILY).reportingDate(reportingDate).startTime(start)
+                .region("GLB3")
+                .additionalAttributes(new java.util.HashMap<>(java.util.Map.of("source", "airflow")))
+                .build();
+
+        when(runRepository.findById("run-rt-stray", reportingDate)).thenReturn(Optional.empty());
+        when(runRepository.upsert(any(CalculatorRun.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(slaBaselineResolver.resolve(any(StartRunRequest.class), eq(Frequency.DAILY), any()))
+                .thenReturn(new SlaBaselineResolver.SlaResolution(null, null));
+
+        service.startRun(request, "tenant-1");
+
+        // RUN_TYPE archetype: stray region nulled + preserved; run_type absent → dimension null ('ALL').
+        verify(runRepository).upsert(argThat(run ->
+                run.getRegion() == null
+                        && run.getRunType() == null
+                        && "GLB3".equals(run.getAdditionalAttributes().get("region"))
+                        && "airflow".equals(run.getAdditionalAttributes().get("source"))));
+        // Dimension null → estimates routed to the blended (3-arg-null) profile slice.
+        verify(calculatorProfileService).getProfile("modelled-exposure", Frequency.DAILY, null, null);
+        assertThat(meterRegistry.counter("obs.ingestion.dimension_missing",
+                "calculator", "modelled-exposure", "archetype", "RUN_TYPE").count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void startRun_runTypeCalc_regionAndRunType_regionStashedRunTypeKept_noMissingCounter() {
+        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
+        LocalDate reportingDate = LocalDate.of(2026, 2, 20);
+        Instant start = Instant.parse("2026-02-20T05:00:00Z");
+
+        when(calculatorNameResolver.dimensionOf("modelled-exposure")).thenReturn(Dimension.RUN_TYPE);
+
+        StartRunRequest request = StartRunRequest.builder()
+                .runId("run-rt-both").calculatorId("calc-1").calculatorName("modelled-exposure")
+                .frequency(Frequency.DAILY).reportingDate(reportingDate).startTime(start)
+                .region("GLB3").runType("ETD")
+                .build();
+
+        when(runRepository.findById("run-rt-both", reportingDate)).thenReturn(Optional.empty());
+        when(runRepository.upsert(any(CalculatorRun.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(slaBaselineResolver.resolve(any(StartRunRequest.class), eq(Frequency.DAILY), any()))
+                .thenReturn(new SlaBaselineResolver.SlaResolution(null, null));
+
+        service.startRun(request, "tenant-1");
+
+        // region stashed; run_type kept as the dimension; a field IS present → no missing counter.
+        verify(runRepository).upsert(argThat(run ->
+                run.getRegion() == null
+                        && "ETD".equals(run.getRunType())
+                        && "GLB3".equals(run.getAdditionalAttributes().get("region"))));
+        verify(calculatorProfileService).getProfile("modelled-exposure", Frequency.DAILY, null, "ETD");
+        assertThat(meterRegistry.find("obs.ingestion.dimension_missing").counter()).isNull();
+    }
+
+    @Test
+    void startRun_regionCalc_strayRunType_stashedRegionKept() {
+        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
+        LocalDate reportingDate = LocalDate.of(2026, 2, 20);
+        Instant start = Instant.parse("2026-02-20T05:00:00Z");
+
+        when(calculatorNameResolver.dimensionOf("capital")).thenReturn(Dimension.REGION);
+
+        StartRunRequest request = StartRunRequest.builder()
+                .runId("run-region-stray").calculatorId("calc-1").calculatorName("capital")
+                .frequency(Frequency.DAILY).reportingDate(reportingDate).startTime(start)
+                .region("AMER").runType("ETD")
+                .build();
+
+        when(runRepository.findById("run-region-stray", reportingDate)).thenReturn(Optional.empty());
+        when(runRepository.upsert(any(CalculatorRun.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(slaBaselineResolver.resolve(any(StartRunRequest.class), eq(Frequency.DAILY), any()))
+                .thenReturn(new SlaBaselineResolver.SlaResolution(null, null));
+
+        service.startRun(request, "tenant-1");
+
+        // REGION archetype: stray run_type nulled + preserved; region kept as the dimension.
+        verify(runRepository).upsert(argThat(run ->
+                run.getRunType() == null
+                        && "AMER".equals(run.getRegion())
+                        && "ETD".equals(run.getAdditionalAttributes().get("run_type"))));
+        verify(calculatorProfileService).getProfile("capital", Frequency.DAILY, null, "AMER");
+        assertThat(meterRegistry.find("obs.ingestion.dimension_missing").counter()).isNull();
     }
 
     // ---------------------------------------------------------------

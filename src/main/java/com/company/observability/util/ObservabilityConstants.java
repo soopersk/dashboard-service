@@ -25,6 +25,7 @@ public final class ObservabilityConstants {
     public static final String INGESTION_RUN_ACTIVE = "obs.ingestion.run.active";
     public static final String INGESTION_JSONB_WRITE_FAILURE = "obs.ingestion.jsonb.write_failure";
     public static final String INGESTION_JSONB_READ_FAILURE = "obs.ingestion.jsonb.read_failure";
+    public static final String INGESTION_DIMENSION_MISSING = "obs.ingestion.dimension_missing";
 
     // ================================================================
     // Query layer (RunQueryService)

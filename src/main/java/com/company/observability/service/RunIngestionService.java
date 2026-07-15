@@ -93,16 +93,30 @@ public class RunIngestionService {
         String runType = resolveField(request.getRunType(), request.getRunParameters(), "run_type");
         String region = resolveField(request.getRegion(), request.getRunParameters(), "region");
 
-        // Dimension-agnostic guard: a NONE-archetype calculator must not be split into per-slice
-        // profiles by a stray/inconsistent label. Collapse region/run_type to the 'ALL' slice but
-        // preserve the original label(s) in additional_attributes for future use.
+        // Archetype dimension guard: only the field matching the calculator's configured archetype
+        // is a legitimate dimension source. Anything else populated is a wrong-field mistake, not a
+        // second dimension — collapse it to the 'ALL' slice but preserve the original value in
+        // additional_attributes (no data loss, no schema change). Applied uniformly to all three
+        // archetypes: NONE stashes both region and run_type (byte-for-byte the former NONE-only
+        // guard); REGION stashes a stray run_type; RUN_TYPE stashes a stray region.
         Map<String, Object> additionalAttributes = request.getAdditionalAttributes();
-        if (calculatorNameResolver.dimensionOf(request.getCalculatorName()) == Dimension.NONE
-                && (region != null || runType != null)) {
+        Dimension archetype = calculatorNameResolver.dimensionOf(request.getCalculatorName());
+        if (archetype != Dimension.REGION && region != null) {
             additionalAttributes = putStray(additionalAttributes, "region", region);
-            additionalAttributes = putStray(additionalAttributes, "run_type", runType);
             region = null;
+        }
+        if (archetype != Dimension.RUN_TYPE && runType != null) {
+            additionalAttributes = putStray(additionalAttributes, "run_type", runType);
             runType = null;
+        }
+        // A dimensional calculator that arrives with neither field lands in the stray 'ALL' bucket,
+        // indistinguishable from legitimate data. Accept the write (never reject over a labeling
+        // problem) but make it observable rather than silent.
+        if ((archetype == Dimension.REGION || archetype == Dimension.RUN_TYPE) && region == null && runType == null) {
+            meterRegistry.counter(INGESTION_DIMENSION_MISSING,
+                    "calculator", request.getCalculatorName(), "archetype", archetype.name()).increment();
+            log.warn("event=run.start.dimension outcome=missing calculator={} archetype={} runId={}",
+                    request.getCalculatorName(), archetype, request.getRunId());
         }
 
         // Run-number-agnostic guard: a calculator not declared run-number-aware must not carry a
