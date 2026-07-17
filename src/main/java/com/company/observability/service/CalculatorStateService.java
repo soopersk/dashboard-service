@@ -37,6 +37,7 @@ public class CalculatorStateService {
     private final SlaProperties slaProperties;
     private final CalculatorStateCacheService stateCache;
     private final CalculatorProfileService profileService;
+    private final CalculatorNameResolver nameResolver;
     private final Clock clock;
 
     // Lower index = worse status (worst-wins ordering mirrors LogicalRunGrouper)
