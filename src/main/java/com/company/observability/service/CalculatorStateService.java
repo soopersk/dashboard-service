@@ -151,13 +151,21 @@ public class CalculatorStateService {
      */
     private CalculatorEntry buildNotStartedEntry(String name, LocalDate date, Frequency freq,
                                                   String runNumber) {
+        // run_number is a real scoping dimension only for run-number-aware calculators. An agnostic
+        // calculator's history is entirely un-numbered (ingestion nulls a stray run_number), so the
+        // un-scoped latest run IS its exact slice — scoping it would match zero rows and strand the
+        // calculator on the guard below. Mirrors CalculatorProfileService.getProfile and
+        // RunQueryController.mergeEntries.
+        String effRn = nameResolver.isRunNumberAware(name) ? runNumber : null;
+
         // ── Latest run (run_number-scoped: a RUN1 projection must not borrow RUN2's frozen deadline) ──
         CalculatorRun latest = runRepository.findLatestRunEstimatesByName(
-                name, freq, runNumber, slaProperties.lookbackDays(freq)).orElse(null);
+                name, freq, effRn, slaProperties.lookbackDays(freq)).orElse(null);
 
-        // A run_number filter with zero scoped history is not an expected run — projecting one
+        // A real run_number filter with zero scoped history is not an expected run — projecting one
         // would invent a bucket (e.g. run_number=99 → a confident T+99 deadline). Empty is honest.
-        if (runNumber != null && latest == null) {
+        // Keyed off effRn, not runNumber: an agnostic calculator has no cycle to be unknown.
+        if (effRn != null && latest == null) {
             log.debug("event=batch_runs.not_started source=none reason=unknown_run_number calculator={} runNumber={}",
                     name, runNumber);
             return new CalculatorEntry(name, null, List.of());
