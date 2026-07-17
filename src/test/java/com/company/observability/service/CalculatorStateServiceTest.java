@@ -40,6 +40,9 @@ class CalculatorStateServiceTest {
     CalculatorProfileService profileService;
 
     @Mock
+    CalculatorNameResolver nameResolver;
+
+    @Mock
     Clock clock;
 
     // Real SlaProperties — still needed for getMinSampleSize() (profile estimation path).
@@ -63,10 +66,14 @@ class CalculatorStateServiceTest {
         lenient().when(clock.instant()).thenReturn(NOW);
         service = new CalculatorStateService(
                 runRepository, new SlaProperties(),
-                stateCache, profileService, clock);
+                stateCache, profileService, nameResolver, clock);
         // Default: cache returns no hits (all misses) so DB is called — matches all pre-existing tests
         lenient().when(stateCache.getEntries(any(), anyString(), any(), any()))
                 .thenReturn(new HashMap<>());
+        // Every pre-existing test uses an unconfigured name ("calc") while asserting run_number-
+        // scoped behaviour, so the suite's implicit contract is "aware". Default to aware to keep
+        // those tests meaning what they meant; the agnostic test overrides.
+        lenient().when(nameResolver.isRunNumberAware(anyString())).thenReturn(true);
         // Default: no profile history and no fallback run — empty-runs case returns empty entry
         lenient().when(profileService.getProfile(anyString(), any(Frequency.class), any()))
                 .thenReturn(NO_HISTORY_PROFILE);
@@ -533,6 +540,48 @@ class CalculatorStateServiceTest {
         assertThat(entries).hasSize(1);
         assertThat(entries.get(0).status()).isEqualTo("NOT_STARTED");
         assertThat(entries.get(0).runNumber()).isEqualTo("1");
+    }
+
+    // ── nocache bypass ──────────────────────────────────────────────────────
+
+    // ── run-number-agnostic calculators ignore the run_number filter ─────────
+
+    /**
+     * A run-number-agnostic calculator (market-risk, modelled-exposure, gemini-hedge) queried with
+     * an explicit run_number must ignore the filter: ingestion nulls a stray run_number, so its
+     * entire history is un-numbered and a scoped lookup matches zero rows — which made the WP11
+     * unknown-run-number guard wrongly return an empty entry. Regression for the missing-entry bug
+     * on marketriskrwacalcdev / modelledexposurecalcdev / geminihedgefundcalcdev.
+     */
+    @Test
+    void notStartedEntry_agnosticCalculator_ignoresRunNumberFilter() {
+        when(nameResolver.isRunNumberAware("agnostic-calc")).thenReturn(false);
+
+        CalculatorProfile profile =
+                new CalculatorProfile("agnostic-calc", "DAILY", null, null, 3_600_000L, 540, 600, 3);
+        when(profileService.getProfile(eq("agnostic-calc"), eq(FREQ), eq("1"))).thenReturn(profile);
+
+        // All real history is un-numbered → only the UNSCOPED lookup can find it.
+        CalculatorRun latest = new CalculatorRun();
+        latest.setCalculatorId("mr-id");
+        latest.setCalculatorName("agnostic-calc");
+        latest.setReportingDate(DATE);
+        latest.setSlaTime(SLA_TIME);
+        when(runRepository.findLatestRunEstimatesByName(eq("agnostic-calc"), eq(FREQ), isNull(), anyInt()))
+                .thenReturn(Optional.of(latest));
+        when(runRepository.findAllRunsByDateAndDimension(eq(DATE), eq(FREQ), eq("1"), any()))
+                .thenReturn(List.of());
+
+        var entries = service.getState(DATE, FREQ, "1", List.of("agnostic-calc"), false)
+                .get("agnostic-calc").runs();
+
+        assertThat(entries).hasSize(1);
+        assertThat(entries.get(0).status()).isEqualTo("NOT_STARTED");
+        assertThat(entries.get(0).estimatedStartTime()).isNotNull();
+        assertThat(entries.get(0).sla()).isNotNull();
+        // The scoped lookup must never be issued for an agnostic calculator.
+        verify(runRepository, never())
+                .findLatestRunEstimatesByName(anyString(), any(Frequency.class), eq("1"), anyInt());
     }
 
     // ── nocache bypass ──────────────────────────────────────────────────────
