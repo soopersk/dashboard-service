@@ -506,6 +506,43 @@ class RunQueryControllerTest {
     }
 
     @Test
+    void batchRuns_runTypeCalc_notStartedPlaceholders_keepSlaWhenQueriedWithRunNumber() throws Exception {
+        // Regression for the degraded-entry symptom: modelled-exposure is run-number-agnostic
+        // (RUN_TYPE dimension), so CalculatorStateService.buildNotStartedEntry must ignore the
+        // requested run_number and still resolve a real latest-run template — restoring the sla
+        // deadline on each ETD/OTC/SFT placeholder instead of leaving it null.
+        when(nameResolver.resolveAll(eq(List.of("modelled-exposure"))))
+                .thenReturn(Map.of("modelled-exposure", List.of("modelledexposurecalc")));
+        when(nameResolver.dimensionOf("modelled-exposure")).thenReturn(Dimension.RUN_TYPE);
+        when(nameResolver.isRunNumberAware("modelled-exposure")).thenReturn(false);
+
+        Instant sla = Instant.parse("2026-03-06T15:00:00Z");
+        var etd = CalculatorBatchRunsResponse.RunEntry.builder()
+                .status("NOT_STARTED").slaStatus("ON_TIME").sla(sla).runType("ETD").isRerun(false).build();
+        var otc = CalculatorBatchRunsResponse.RunEntry.builder()
+                .status("NOT_STARTED").slaStatus("ON_TIME").sla(sla).runType("OTC").isRerun(false).build();
+        var sft = CalculatorBatchRunsResponse.RunEntry.builder()
+                .status("NOT_STARTED").slaStatus("ON_TIME").sla(sla).runType("SFT").isRerun(false).build();
+        var entry = new CalculatorBatchRunsResponse.CalculatorEntry("modelledexposurecalc", null,
+                List.of(etd, otc, sft));
+        when(calculatorStateService.getState(any(), eq(Frequency.DAILY), eq("1"),
+                eq(List.of("modelledexposurecalc")), anyBoolean()))
+                .thenReturn(Map.of("modelledexposurecalc", entry));
+
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "2026-03-06")
+                        .param("frequency", "DAILY")
+                        .param("run_number", "1")
+                        .param("keys", "modelled-exposure")
+                        .header(TENANT_HEADER, "t1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculators.modelled-exposure.runs.length()").value(3))
+                .andExpect(jsonPath("$.calculators.modelled-exposure.runs[0].sla").isNotEmpty())
+                .andExpect(jsonPath("$.calculators.modelled-exposure.runs[1].sla").isNotEmpty())
+                .andExpect(jsonPath("$.calculators.modelled-exposure.runs[2].sla").isNotEmpty());
+    }
+
+    @Test
     void batchRuns_runEntryCarriesRunNumber() throws Exception {
         var runEntry = CalculatorBatchRunsResponse.RunEntry.builder()
                 .runId("r-1").region("AMER").runNumber("2")
