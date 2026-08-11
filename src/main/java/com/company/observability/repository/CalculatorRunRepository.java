@@ -46,17 +46,31 @@ public class CalculatorRunRepository {
     private final JsonbConverter jsonbConverter;
     private final MeterRegistry meterRegistry;
 
-    private static final String SELECT_BASE = """
-        SELECT run_id, calculator_id, calculator_name, tenant_id, frequency, reporting_date,
-               start_time, end_time, duration_ms,
-               status, sla_time, expected_duration_ms,
-               estimated_start_time, estimated_end_time,
-               sla_band, sla_breached, sla_breach_reason,
-               run_number, run_type, region, correlation_id,
-               run_parameters, additional_attributes,
-               created_at, updated_at
-        FROM calculator_runs
-        """;
+    /** Scalar columns every read path maps. Excludes the JSONB payload — see {@link #SELECT_WITH_JSONB}. */
+    private static final String CORE_COLUMNS = """
+        run_id, calculator_id, calculator_name, tenant_id, frequency, reporting_date,
+        start_time, end_time, duration_ms,
+        status, sla_time, expected_duration_ms,
+        estimated_start_time, estimated_end_time,
+        sla_band, sla_breached, sla_breach_reason,
+        run_number, run_type, region, correlation_id,
+        created_at, updated_at""";
+
+    /**
+     * Default read path — pair with {@code new CalculatorRunRowMapper(false)}. Omits
+     * {@code run_parameters}/{@code additional_attributes} so Postgres does not serialize (and
+     * de-TOAST) JSONB the mapper discards.
+     */
+    private static final String SELECT_BASE =
+            "SELECT " + CORE_COLUMNS + "\nFROM calculator_runs\n";
+
+    /**
+     * JSONB-carrying read path — pair with {@code new CalculatorRunRowMapper(true)}. Required
+     * wherever the loaded run is written back via {@link #upsert}, which would otherwise null
+     * the JSONB columns out.
+     */
+    private static final String SELECT_WITH_JSONB =
+            "SELECT " + CORE_COLUMNS + ",\nrun_parameters, additional_attributes\nFROM calculator_runs\n";
 
     /**
      * Write-through upsert with partition key
@@ -236,7 +250,7 @@ public class CalculatorRunRepository {
     public Optional<CalculatorRun> findByIdForUpdate(String runId, LocalDate reportingDate) {
         Objects.requireNonNull(runId, "runId must not be null");
         Objects.requireNonNull(reportingDate, "reportingDate must not be null");
-        String sql = SELECT_BASE + " WHERE run_id = :runId AND reporting_date = :reportingDate FOR UPDATE";
+        String sql = SELECT_WITH_JSONB + " WHERE run_id = :runId AND reporting_date = :reportingDate FOR UPDATE";
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("runId", runId)
                 .addValue("reportingDate", reportingDate);
@@ -252,7 +266,7 @@ public class CalculatorRunRepository {
      * Find by run_id without partition key (slower - scans multiple partitions)
      */
     public Optional<CalculatorRun> findById(String runId) {
-        String sql = SELECT_BASE + " WHERE run_id = :runId ORDER BY reporting_date DESC LIMIT 1";
+        String sql = SELECT_WITH_JSONB + " WHERE run_id = :runId ORDER BY reporting_date DESC LIMIT 1";
         MapSqlParameterSource params = new MapSqlParameterSource().addValue("runId", runId);
 
         Timer.Sample sample = Timer.start(meterRegistry);
@@ -448,9 +462,7 @@ public class CalculatorRunRepository {
             return List.of();
         }
 
-        StringBuilder sql = new StringBuilder("""
-                SELECT *
-                FROM calculator_runs
+        StringBuilder sql = new StringBuilder(SELECT_BASE + """
                 WHERE reporting_date  = :reportingDate
                   AND frequency       = :frequency
                   AND calculator_name IN (:calculatorNames)
