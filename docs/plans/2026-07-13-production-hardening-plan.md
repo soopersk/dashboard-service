@@ -827,6 +827,37 @@ private static int circularMeanMinute(double sumSin, double sumCos, long linearS
 
 **Step 6: Commit** — `fix: circular mean for profile start/end minutes (midnight wraparound)`
 
+**Step 7: Retiring `sum_start_min_utc`/`sum_end_min_utc`**
+
+`ADD COLUMN ... DEFAULT 0` does not backfill existing rows, and the nightly job only recomputes a narrow trailing window (`observability.aggregation.recompute-window`: 7d DAILY / 20d MONTHLY — sized to completion lag) that is much shorter than the profile read lookback (`observability.sla.lookback`: 30d DAILY / 395d MONTHLY — sized to SLA baseline relevance). Left alone, MONTHLY rows aged 21–395 days keep `sum_start_sin = sum_start_cos = 0` indefinitely under normal operation — they're inside the read lookback but outside the automatic recompute window — so profiles silently run on a ~20-day sample instead of the intended ~13-month one, and the legacy columns can't be dropped on any near-term timeline. Two options:
+
+- **Option 1 — passive:** Do nothing; let stale rows age out of the lookback window on their own. Zero extra work, but MONTHLY profiles are degraded for up to ~13 months, and `sum_start_min_utc`/`sum_end_min_utc` must stay until that full window has elapsed.
+- **Option 2 — active backfill (recommended):** Immediately after this task ships, drive the existing admin endpoint `POST /api/v1/admin/aggregation/recompute?from=...&to=...` (`AdminAggregationController`, wraps `DailyAggregationJob.recomputeRange`) to force-populate the new sin/cos columns across the *full* MONTHLY lookback, not just the trailing recompute window.
+
+  **Endpoint facts that shape how to call it:**
+  - Requires the **ADMIN** role, not the default app user — `/api/v1/admin/**` is `hasRole("ADMIN")` in `BasicSecurityConfig`. Default creds are `ops`/`ops` (`observability.security.admin.username` / `...password`), distinct from the regular `admin`/`admin` app user.
+  - One call recomputes **both DAILY and MONTHLY** over the same `[from, to]` range (`recomputeRange` calls `recomputeForDateRange` for each frequency with identical bounds) — no separate DAILY call is needed; the first backfill chunk already covers the 30-day DAILY lookback.
+  - `to` is optional and defaults to today; `from` is required.
+  - Server-enforced cap: `MAX_SPAN_DAYS = 800`, so a single `from=today-395d&to=today` call is technically *allowed* — chunking below is a self-imposed operational choice to bound per-call cost against the ~395 MONTHLY partitions (TD-8), not an API requirement.
+
+  **Exact steps:**
+  1. Deploy the P2.1 migration + code (Steps 1–6) first — the endpoint recomputes from `calculator_runs`/writes `calculator_sli_daily` using whatever columns exist at call time.
+  2. Add a counter/log on the `circularMeanMinute` legacy-fallback branch (`sumSin == 0 && sumCos == 0`) *before* backfilling, so "safe to drop" is later confirmed by observed evidence (fallback stopped firing), not a calendar guess.
+  3. Run the backfill in ~30-day chunks covering the full 395-day MONTHLY lookback, oldest first, during low-traffic hours:
+     ```bash
+     today=$(date -u +%F)
+     from=$(date -u -d "$today - 395 days" +%F)
+     while [ "$from" \< "$today" ]; do
+         to=$(date -u -d "$from + 30 days" +%F)
+         [ "$to" \> "$today" ] && to="$today"
+         curl -u ops:ops -X POST \
+             "https://<host>/api/v1/admin/aggregation/recompute?from=${from}&to=${to}"
+         from=$(date -u -d "$to + 1 day" +%F)
+     done
+     ```
+     Each response is `{"from", "to", "rowsRecomputed", "profilesWarmed"}` — confirm `rowsRecomputed > 0` per chunk (0 across a chunk with known historical runs signals a problem, not "nothing to do").
+  4. Once the fallback counter from step 2 confirms zero hits for at least one full nightly cycle, ship a follow-up migration (`DROP COLUMN sum_start_min_utc, sum_end_min_utc`) and remove `linearSum`/`totalRuns` from `CalculatorProfile.fromSums`/`circularMeanMinute` and the corresponding SELECT/INSERT columns.
+
 ---
 
 ### Task P2.2: 400 (not 500) for query-param type mismatches

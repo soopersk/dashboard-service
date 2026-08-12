@@ -69,8 +69,17 @@ public record CalculatorProfile(
                 avgDurationMs, avgStartMinUtc, avgEndMinUtc, totalRuns, confidence);
     }
 
+    /** Zero-sample sentinel for a slice with no history yet. */
+    public static CalculatorProfile empty(String calculatorName, String frequency, String runNumber,
+                                          String dimensionValue) {
+        return new CalculatorProfile(calculatorName, frequency, runNumber, dimensionValue, 0, 0, 0, 0);
+    }
+
     /**
      * Build from summed aggregate columns, computing averages (0 when no runs).
+     * Start/end minute-of-day is circular (wraps at midnight): the SIN/COS component sums
+     * give the true mean via {@link #circularMeanMinute}; the linear sums remain only as
+     * that method's legacy-row/zero-vector fallback.
      *
      * @param runNumber null for blended (cross-run_number) profiles; "1" or "2" for cycle-scoped.
      * @param dimensionValue null for blended/non-dimension profiles; region/run_type value otherwise.
@@ -78,16 +87,34 @@ public record CalculatorProfile(
     public static CalculatorProfile fromSums(String calculatorName, String frequency, String runNumber,
                                              String dimensionValue,
                                              long sumDurationMs, long sumStartMinUtc, long sumEndMinUtc,
+                                             double sumStartSin, double sumStartCos,
+                                             double sumEndSin, double sumEndCos,
                                              int totalRuns) {
         if (totalRuns <= 0) {
-            return new CalculatorProfile(calculatorName, frequency, runNumber, dimensionValue, 0, 0, 0, 0);
+            return empty(calculatorName, frequency, runNumber, dimensionValue);
         }
         return new CalculatorProfile(
                 calculatorName, frequency, runNumber, dimensionValue,
                 sumDurationMs / totalRuns,
-                (int) (sumStartMinUtc / totalRuns),
-                (int) (sumEndMinUtc / totalRuns),
+                circularMeanMinute(sumStartSin, sumStartCos, sumStartMinUtc, totalRuns),
+                circularMeanMinute(sumEndSin, sumEndCos, sumEndMinUtc, totalRuns),
                 totalRuns);
+    }
+
+    /**
+     * Circular mean of a minute-of-day (0–1439) angle from summed unit-circle components
+     * ({@code sumSin}/{@code sumCos} = Σ sin/cos of {@code 2π·minute/1440} across the group).
+     * Falls back to the linear mean when the resultant vector is exactly zero — either a
+     * legacy pre-migration row (sin/cos sums default to 0) or the genuine edge case of runs
+     * that cancel exactly (e.g. two runs 12h apart), which has no well-defined circular mean.
+     */
+    public static int circularMeanMinute(double sumSin, double sumCos, long linearSum, int totalRuns) {
+        if (sumSin == 0.0 && sumCos == 0.0) {
+            return totalRuns > 0 ? (int) (linearSum / totalRuns) : 0;
+        }
+        double angle = Math.atan2(sumSin, sumCos);
+        if (angle < 0) angle += 2 * Math.PI;
+        return (int) Math.round(angle / (2 * Math.PI) * 1440) % 1440;
     }
 
     public boolean hasSufficientSamples(int minSampleSize) {

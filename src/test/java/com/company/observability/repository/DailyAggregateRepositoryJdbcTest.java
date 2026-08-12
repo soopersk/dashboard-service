@@ -400,4 +400,94 @@ class DailyAggregateRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
         CalculatorProfile wide = repository.findRecentExactByRunNumber("calc-M", "MONTHLY", 395, null);
         assertThat(wide.totalRuns()).isEqualTo(5);
     }
+
+    // ---------------------------------------------------------------
+    // Circular mean for start/end minute-of-day (H5 — midnight wraparound)
+    // ---------------------------------------------------------------
+
+    @Test
+    void recompute_populatesSinCosColumns() {
+        insertRun("r1", "calc-1", "tenant-1", "DAILY", DATE, 300, 100L, "SUCCESS", false);
+
+        recomputeBoth(DATE.minusDays(1), DATE);
+
+        Double sin = jdbcTemplate.queryForObject(
+                "SELECT sum_start_sin FROM calculator_sli_daily WHERE calculator_name = 'calc-1'", Double.class);
+        Double cos = jdbcTemplate.queryForObject(
+                "SELECT sum_start_cos FROM calculator_sli_daily WHERE calculator_name = 'calc-1'", Double.class);
+        assertThat(sin).isNotZero();
+        assertThat(cos).isNotZero();
+    }
+
+    /** Circular mean of 23:50 and 00:10 is 00:00 (midnight), not 12:00 (noon) from the old linear mean. */
+    @Test
+    void findProfile_circularMean_handlesMidnightWraparound() {
+        insertRun("r1", "calc-1", "tenant-1", "DAILY", DATE, 1430, 100L, "SUCCESS", false); // 23:50
+        insertRun("r2", "calc-1", "tenant-1", "DAILY", DATE, 1450, 100L, "SUCCESS", false); // rolls to next day 00:10
+
+        recomputeBoth(DATE.minusDays(1), DATE);
+
+        CalculatorProfile profile = repository.findProfile("calc-1", "DAILY", 3);
+
+        assertThat(profile.totalRuns()).isEqualTo(2);
+        assertThat(profile.avgStartMinUtc()).isEqualTo(0);
+    }
+
+    /** Runs clustered away from midnight: circular and linear means agree — no regression. */
+    @Test
+    void findProfile_circularMean_middayCluster_unaffectedByFix() {
+        insertRun("r1", "calc-1", "tenant-1", "DAILY", DATE, 300, 100L, "SUCCESS", false); // 05:00
+        insertRun("r2", "calc-1", "tenant-1", "DAILY", DATE, 360, 100L, "SUCCESS", false); // 06:00
+
+        recomputeBoth(DATE.minusDays(1), DATE);
+
+        CalculatorProfile profile = repository.findProfile("calc-1", "DAILY", 3);
+
+        assertThat(profile.avgStartMinUtc()).isEqualTo(330); // (300 + 360) / 2, same as the old linear mean
+    }
+
+    /** A row written before V11 (sin/cos still at their DEFAULT 0) reads via the legacy linear fallback. */
+    @Test
+    void findProfile_legacyRow_sinCosDefaultZero_fallsBackToLinearMean() {
+        jdbcTemplate.update("""
+                INSERT INTO calculator_sli_daily (
+                    calculator_name, frequency, reporting_date, run_number, dimension_value,
+                    total_runs, success_runs, sla_breaches,
+                    sum_duration_ms, sum_start_min_utc, sum_end_min_utc, computed_at)
+                VALUES ('calc-legacy', 'DAILY', ?, 'ALL', 'ALL', 2, 2, 0, 200000, 900, 960, NOW())
+                """, DATE);
+
+        CalculatorProfile profile = repository.findProfile("calc-legacy", "DAILY", 3);
+
+        assertThat(profile.totalRuns()).isEqualTo(2);
+        assertThat(profile.avgStartMinUtc()).isEqualTo(450); // 900 / 2, via the sin==0 && cos==0 fallback
+        assertThat(profile.avgEndMinUtc()).isEqualTo(480);   // 960 / 2
+    }
+
+    /** Tier-2 (findRecentExact) got a surgical circular-mean fix too — verify it independently of Tier 1. */
+    @Test
+    void findRecentExactBlended_circularMean_handlesMidnightWraparound() {
+        insertRun("r1", "calc-2", "tenant-1", "DAILY", DATE, 1430, 100L, "SUCCESS", false); // 23:50
+        insertRun("r2", "calc-2", "tenant-1", "DAILY", DATE, 1450, 100L, "SUCCESS", false); // 00:10 next day
+
+        CalculatorProfile profile = repository.findRecentExactBlended("calc-2", "DAILY", 3);
+
+        assertThat(profile.totalRuns()).isEqualTo(2);
+        assertThat(profile.avgStartMinUtc()).isEqualTo(0);
+        assertThat(profile.avgDurationMs()).isEqualTo(100L); // unchanged rounding, only the minute columns changed
+    }
+
+    /** Spot-check the nightly-warm query (distinct GROUP BY shape) also carries the circular mean through. */
+    @Test
+    void findAllProfiles_circularMean_handlesMidnightWraparound() {
+        insertRun("r1", "calc-1", "tenant-1", "DAILY", DATE, 1430, 100L, "SUCCESS", false); // 23:50
+        insertRun("r2", "calc-1", "tenant-1", "DAILY", DATE, 1450, 100L, "SUCCESS", false); // 00:10 next day
+
+        recomputeBoth(DATE.minusDays(1), DATE);
+
+        List<CalculatorProfile> profiles = repository.findAllProfiles("DAILY", 3);
+
+        assertThat(profiles).hasSize(1);
+        assertThat(profiles.get(0).avgStartMinUtc()).isEqualTo(0);
+    }
 }

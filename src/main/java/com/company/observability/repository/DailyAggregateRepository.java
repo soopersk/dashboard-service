@@ -59,7 +59,8 @@ public class DailyAggregateRepository {
             INSERT INTO calculator_sli_daily (
                 calculator_name, frequency, reporting_date, run_number, dimension_value,
                 total_runs, success_runs, sla_breaches,
-                sum_duration_ms, sum_start_min_utc, sum_end_min_utc, computed_at
+                sum_duration_ms, sum_start_min_utc, sum_end_min_utc,
+                sum_start_sin, sum_start_cos, sum_end_sin, sum_end_cos, computed_at
             )
             SELECT
                 calculator_name, frequency, reporting_date,
@@ -77,6 +78,34 @@ public class DailyAggregateRepository {
                     CASE WHEN end_time IS NOT NULL THEN
                         EXTRACT(HOUR   FROM end_time AT TIME ZONE 'UTC') * 60 +
                         EXTRACT(MINUTE FROM end_time AT TIME ZONE 'UTC')
+                    ELSE 0 END
+                ), 0),
+                COALESCE(SUM(
+                    SIN(2 * PI() * (
+                        EXTRACT(HOUR   FROM start_time AT TIME ZONE 'UTC') * 60 +
+                        EXTRACT(MINUTE FROM start_time AT TIME ZONE 'UTC')
+                    ) / 1440.0)
+                ), 0),
+                COALESCE(SUM(
+                    COS(2 * PI() * (
+                        EXTRACT(HOUR   FROM start_time AT TIME ZONE 'UTC') * 60 +
+                        EXTRACT(MINUTE FROM start_time AT TIME ZONE 'UTC')
+                    ) / 1440.0)
+                ), 0),
+                COALESCE(SUM(
+                    CASE WHEN end_time IS NOT NULL THEN
+                        SIN(2 * PI() * (
+                            EXTRACT(HOUR   FROM end_time AT TIME ZONE 'UTC') * 60 +
+                            EXTRACT(MINUTE FROM end_time AT TIME ZONE 'UTC')
+                        ) / 1440.0)
+                    ELSE 0 END
+                ), 0),
+                COALESCE(SUM(
+                    CASE WHEN end_time IS NOT NULL THEN
+                        COS(2 * PI() * (
+                            EXTRACT(HOUR   FROM end_time AT TIME ZONE 'UTC') * 60 +
+                            EXTRACT(MINUTE FROM end_time AT TIME ZONE 'UTC')
+                        ) / 1440.0)
                     ELSE 0 END
                 ), 0),
                 NOW()
@@ -189,6 +218,10 @@ public class DailyAggregateRepository {
             SELECT COALESCE(SUM(sum_duration_ms), 0)   AS sum_duration_ms,
                    COALESCE(SUM(sum_start_min_utc), 0) AS sum_start_min_utc,
                    COALESCE(SUM(sum_end_min_utc), 0)   AS sum_end_min_utc,
+                   COALESCE(SUM(sum_start_sin), 0)     AS sum_start_sin,
+                   COALESCE(SUM(sum_start_cos), 0)     AS sum_start_cos,
+                   COALESCE(SUM(sum_end_sin), 0)       AS sum_end_sin,
+                   COALESCE(SUM(sum_end_cos), 0)       AS sum_end_cos,
                    COALESCE(SUM(total_runs), 0)        AS total_runs
             FROM calculator_sli_daily
             WHERE calculator_name = :calculatorName
@@ -204,12 +237,14 @@ public class DailyAggregateRepository {
         try {
             return jdbcTemplate.queryForObject(sql, params, (rs, rowNum) -> CalculatorProfile.fromSums(
                     calculatorName, frequency, null, null,
-                    rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"),
-                    rs.getLong("sum_end_min_utc"), rs.getInt("total_runs")));
+                    rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"), rs.getLong("sum_end_min_utc"),
+                    rs.getDouble("sum_start_sin"), rs.getDouble("sum_start_cos"),
+                    rs.getDouble("sum_end_sin"), rs.getDouble("sum_end_cos"),
+                    rs.getInt("total_runs")));
         } catch (Exception e) {
             log.error("event=daily_aggregate.find_profile outcome=failure calculator_name={} frequency={}",
                     calculatorName, frequency, e);
-            return CalculatorProfile.fromSums(calculatorName, frequency, null, null, 0, 0, 0, 0);
+            return CalculatorProfile.empty(calculatorName, frequency, null, null);
         }
     }
 
@@ -224,6 +259,10 @@ public class DailyAggregateRepository {
                    SUM(sum_duration_ms)   AS sum_duration_ms,
                    SUM(sum_start_min_utc) AS sum_start_min_utc,
                    SUM(sum_end_min_utc)   AS sum_end_min_utc,
+                   SUM(sum_start_sin)     AS sum_start_sin,
+                   SUM(sum_start_cos)     AS sum_start_cos,
+                   SUM(sum_end_sin)       AS sum_end_sin,
+                   SUM(sum_end_cos)       AS sum_end_cos,
                    SUM(total_runs)        AS total_runs
             FROM calculator_sli_daily
             WHERE frequency = :frequency
@@ -238,8 +277,10 @@ public class DailyAggregateRepository {
         try {
             return jdbcTemplate.query(sql, params, (rs, rowNum) -> CalculatorProfile.fromSums(
                     rs.getString("calculator_name"), frequency, null, null,
-                    rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"),
-                    rs.getLong("sum_end_min_utc"), rs.getInt("total_runs")));
+                    rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"), rs.getLong("sum_end_min_utc"),
+                    rs.getDouble("sum_start_sin"), rs.getDouble("sum_start_cos"),
+                    rs.getDouble("sum_end_sin"), rs.getDouble("sum_end_cos"),
+                    rs.getInt("total_runs")));
         } catch (Exception e) {
             log.error("event=daily_aggregate.find_all_profiles outcome=failure frequency={}", frequency, e);
             return Collections.emptyList();
@@ -258,6 +299,10 @@ public class DailyAggregateRepository {
                    SUM(sum_duration_ms)   AS sum_duration_ms,
                    SUM(sum_start_min_utc) AS sum_start_min_utc,
                    SUM(sum_end_min_utc)   AS sum_end_min_utc,
+                   SUM(sum_start_sin)     AS sum_start_sin,
+                   SUM(sum_start_cos)     AS sum_start_cos,
+                   SUM(sum_end_sin)       AS sum_end_sin,
+                   SUM(sum_end_cos)       AS sum_end_cos,
                    SUM(total_runs)        AS total_runs
             FROM calculator_sli_daily
             WHERE frequency = :frequency
@@ -273,8 +318,10 @@ public class DailyAggregateRepository {
         try {
             return jdbcTemplate.query(sql, params, (rs, rowNum) -> CalculatorProfile.fromSums(
                     rs.getString("calculator_name"), frequency, rs.getString("run_number"), null,
-                    rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"),
-                    rs.getLong("sum_end_min_utc"), rs.getInt("total_runs")));
+                    rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"), rs.getLong("sum_end_min_utc"),
+                    rs.getDouble("sum_start_sin"), rs.getDouble("sum_start_cos"),
+                    rs.getDouble("sum_end_sin"), rs.getDouble("sum_end_cos"),
+                    rs.getInt("total_runs")));
         } catch (Exception e) {
             log.error("event=daily_aggregate.find_all_profiles_by_run_number outcome=failure frequency={}", frequency, e);
             return Collections.emptyList();
@@ -292,6 +339,10 @@ public class DailyAggregateRepository {
             SELECT COALESCE(SUM(sum_duration_ms), 0)   AS sum_duration_ms,
                    COALESCE(SUM(sum_start_min_utc), 0) AS sum_start_min_utc,
                    COALESCE(SUM(sum_end_min_utc), 0)   AS sum_end_min_utc,
+                   COALESCE(SUM(sum_start_sin), 0)     AS sum_start_sin,
+                   COALESCE(SUM(sum_start_cos), 0)     AS sum_start_cos,
+                   COALESCE(SUM(sum_end_sin), 0)       AS sum_end_sin,
+                   COALESCE(SUM(sum_end_cos), 0)       AS sum_end_cos,
                    COALESCE(SUM(total_runs), 0)        AS total_runs
             FROM calculator_sli_daily
             WHERE calculator_name = :calculatorName
@@ -309,12 +360,14 @@ public class DailyAggregateRepository {
         try {
             return jdbcTemplate.queryForObject(sql, params, (rs, rowNum) -> CalculatorProfile.fromSums(
                     calculatorName, frequency, runNumber, null,
-                    rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"),
-                    rs.getLong("sum_end_min_utc"), rs.getInt("total_runs")));
+                    rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"), rs.getLong("sum_end_min_utc"),
+                    rs.getDouble("sum_start_sin"), rs.getDouble("sum_start_cos"),
+                    rs.getDouble("sum_end_sin"), rs.getDouble("sum_end_cos"),
+                    rs.getInt("total_runs")));
         } catch (Exception e) {
             log.error("event=daily_aggregate.find_profile_by_run_number outcome=failure calculator_name={} frequency={} runNumber={}",
                     calculatorName, frequency, runNumber, e);
-            return CalculatorProfile.fromSums(calculatorName, frequency, runNumber, null, 0, 0, 0, 0);
+            return CalculatorProfile.empty(calculatorName, frequency, runNumber, null);
         }
     }
 
@@ -329,6 +382,10 @@ public class DailyAggregateRepository {
             SELECT COALESCE(SUM(sum_duration_ms), 0)   AS sum_duration_ms,
                    COALESCE(SUM(sum_start_min_utc), 0) AS sum_start_min_utc,
                    COALESCE(SUM(sum_end_min_utc), 0)   AS sum_end_min_utc,
+                   COALESCE(SUM(sum_start_sin), 0)     AS sum_start_sin,
+                   COALESCE(SUM(sum_start_cos), 0)     AS sum_start_cos,
+                   COALESCE(SUM(sum_end_sin), 0)       AS sum_end_sin,
+                   COALESCE(SUM(sum_end_cos), 0)       AS sum_end_cos,
                    COALESCE(SUM(total_runs), 0)        AS total_runs
             FROM calculator_sli_daily
             WHERE calculator_name = :calculatorName
@@ -348,12 +405,14 @@ public class DailyAggregateRepository {
         try {
             return jdbcTemplate.queryForObject(sql, params, (rs, rowNum) -> CalculatorProfile.fromSums(
                     calculatorName, frequency, runNumber, dimensionValue,
-                    rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"),
-                    rs.getLong("sum_end_min_utc"), rs.getInt("total_runs")));
+                    rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"), rs.getLong("sum_end_min_utc"),
+                    rs.getDouble("sum_start_sin"), rs.getDouble("sum_start_cos"),
+                    rs.getDouble("sum_end_sin"), rs.getDouble("sum_end_cos"),
+                    rs.getInt("total_runs")));
         } catch (Exception e) {
             log.error("event=daily_aggregate.find_profile_by_dim outcome=failure calculator_name={} frequency={} runNumber={} dim={}",
                     calculatorName, frequency, runNumber, dimensionValue, e);
-            return CalculatorProfile.fromSums(calculatorName, frequency, runNumber, dimensionValue, 0, 0, 0, 0);
+            return CalculatorProfile.empty(calculatorName, frequency, runNumber, dimensionValue);
         }
     }
 
@@ -368,6 +427,10 @@ public class DailyAggregateRepository {
                    SUM(sum_duration_ms)   AS sum_duration_ms,
                    SUM(sum_start_min_utc) AS sum_start_min_utc,
                    SUM(sum_end_min_utc)   AS sum_end_min_utc,
+                   SUM(sum_start_sin)     AS sum_start_sin,
+                   SUM(sum_start_cos)     AS sum_start_cos,
+                   SUM(sum_end_sin)       AS sum_end_sin,
+                   SUM(sum_end_cos)       AS sum_end_cos,
                    SUM(total_runs)        AS total_runs
             FROM calculator_sli_daily
             WHERE frequency = :frequency
@@ -389,8 +452,10 @@ public class DailyAggregateRepository {
                 return CalculatorProfile.fromSums(
                         rs.getString("calculator_name"), frequency, rn,
                         rs.getString("dimension_value"),
-                        rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"),
-                        rs.getLong("sum_end_min_utc"), rs.getInt("total_runs"));
+                        rs.getLong("sum_duration_ms"), rs.getLong("sum_start_min_utc"), rs.getLong("sum_end_min_utc"),
+                        rs.getDouble("sum_start_sin"), rs.getDouble("sum_start_cos"),
+                        rs.getDouble("sum_end_sin"), rs.getDouble("sum_end_cos"),
+                        rs.getInt("total_runs"));
             });
         } catch (Exception e) {
             log.error("event=daily_aggregate.find_all_profiles_by_dim outcome=failure frequency={}", frequency, e);
@@ -440,14 +505,20 @@ public class DailyAggregateRepository {
                 ? "AND COALESCE(region, run_type, 'ALL') = :dimensionValue\n"
                 : "";
         String sql = """
-            SELECT COALESCE(AVG(duration_ms), 0)                                AS avg_duration_ms,
-                   COALESCE(AVG(EXTRACT(HOUR   FROM start_time AT TIME ZONE 'UTC') * 60 +
-                               EXTRACT(MINUTE FROM start_time AT TIME ZONE 'UTC')), 0) AS avg_start_min_utc,
-                   COALESCE(AVG(EXTRACT(HOUR   FROM end_time   AT TIME ZONE 'UTC') * 60 +
-                               EXTRACT(MINUTE FROM end_time   AT TIME ZONE 'UTC')), 0) AS avg_end_min_utc,
-                   COUNT(*)                                                      AS total_runs
+            SELECT COALESCE(AVG(duration_ms), 0)                                       AS avg_duration_ms,
+                   COALESCE(SUM(start_min), 0)                                          AS sum_start_min_utc,
+                   COALESCE(SUM(SIN(2 * PI() * start_min / 1440.0)), 0)                 AS sum_start_sin,
+                   COALESCE(SUM(COS(2 * PI() * start_min / 1440.0)), 0)                 AS sum_start_cos,
+                   COALESCE(SUM(end_min), 0)                                            AS sum_end_min_utc,
+                   COALESCE(SUM(SIN(2 * PI() * end_min / 1440.0)), 0)                   AS sum_end_sin,
+                   COALESCE(SUM(COS(2 * PI() * end_min / 1440.0)), 0)                   AS sum_end_cos,
+                   COUNT(*)                                                             AS total_runs
             FROM (
-                SELECT duration_ms, start_time, end_time
+                SELECT duration_ms,
+                       EXTRACT(HOUR   FROM start_time AT TIME ZONE 'UTC') * 60 +
+                       EXTRACT(MINUTE FROM start_time AT TIME ZONE 'UTC') AS start_min,
+                       EXTRACT(HOUR   FROM end_time   AT TIME ZONE 'UTC') * 60 +
+                       EXTRACT(MINUTE FROM end_time   AT TIME ZONE 'UTC') AS end_min
                 FROM calculator_runs
                 WHERE calculator_name = :calculatorName
                   AND frequency        = :frequency
@@ -475,12 +546,14 @@ public class DailyAggregateRepository {
             CalculatorProfile profile = jdbcTemplate.queryForObject(sql, params, (rs, rowNum) -> {
                 int total = rs.getInt("total_runs");
                 if (total <= 0) {
-                    return CalculatorProfile.fromSums(calculatorName, frequency, runNumber, dimensionValue, 0, 0, 0, 0);
+                    return CalculatorProfile.empty(calculatorName, frequency, runNumber, dimensionValue);
                 }
                 return new CalculatorProfile(calculatorName, frequency, runNumber, dimensionValue,
                         Math.round(rs.getDouble("avg_duration_ms")),
-                        (int) Math.round(rs.getDouble("avg_start_min_utc")),
-                        (int) Math.round(rs.getDouble("avg_end_min_utc")),
+                        CalculatorProfile.circularMeanMinute(rs.getDouble("sum_start_sin"), rs.getDouble("sum_start_cos"),
+                                rs.getLong("sum_start_min_utc"), total),
+                        CalculatorProfile.circularMeanMinute(rs.getDouble("sum_end_sin"), rs.getDouble("sum_end_cos"),
+                                rs.getLong("sum_end_min_utc"), total),
                         total);
             });
             sample.stop(Timer.builder(DB_QUERY_DURATION).tag("query", "find_recent_exact").register(meterRegistry));
@@ -488,7 +561,7 @@ public class DailyAggregateRepository {
         } catch (Exception e) {
             log.error("event=daily_aggregate.find_recent_exact outcome=failure calculator_name={} frequency={} runNumber={} dim={}",
                     calculatorName, frequency, runNumber, dimensionValue, e);
-            return CalculatorProfile.fromSums(calculatorName, frequency, runNumber, dimensionValue, 0, 0, 0, 0);
+            return CalculatorProfile.empty(calculatorName, frequency, runNumber, dimensionValue);
         }
     }
 

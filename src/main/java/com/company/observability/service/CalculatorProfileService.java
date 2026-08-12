@@ -75,8 +75,7 @@ public class CalculatorProfileService {
         }
 
         // Both tiers missed — zero-sample sentinel (cached briefly).
-        return cacheAndReturn(key, CalculatorProfile.fromSums(
-                calculatorName, frequency.name(), null, null, 0, 0, 0, 0));
+        return cacheAndReturn(key, CalculatorProfile.empty(calculatorName, frequency.name(), null, null));
     }
 
     /**
@@ -125,8 +124,7 @@ public class CalculatorProfileService {
         }
 
         // Both tiers missed — zero-sample sentinel (cached briefly).
-        return cacheAndReturn(key, CalculatorProfile.fromSums(
-                calculatorName, frequency.name(), runNumber, null, 0, 0, 0, 0));
+        return cacheAndReturn(key, CalculatorProfile.empty(calculatorName, frequency.name(), runNumber, null));
     }
 
     /**
@@ -174,8 +172,7 @@ public class CalculatorProfileService {
         }
 
         // Both tiers missed — zero-sample sentinel (cached briefly).
-        return cacheAndReturn(key, CalculatorProfile.fromSums(
-                calculatorName, frequency.name(), effRn, dimensionValue, 0, 0, 0, 0));
+        return cacheAndReturn(key, CalculatorProfile.empty(calculatorName, frequency.name(), effRn, dimensionValue));
     }
 
     /** EXACT when the exact slice has enough samples, SPARSE_EXACT when it has 1..(min-1). */
