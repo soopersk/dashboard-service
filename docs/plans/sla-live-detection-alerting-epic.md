@@ -163,6 +163,20 @@ CREATE TABLE sla_breach_events (
 );
 ```
 
+### Components to build
+Two distinct types are involved — don't conflate them:
+
+| Type | Package | Lifetime | Purpose |
+|---|---|---|---|
+| `SlaBreachedEvent` | `event` | transient, in-memory only | Spring application event carrying `CalculatorRun` + `SlaEvaluationResult`; published `AFTER_COMMIT` |
+| `SlaBreachEvent` | `domain` | persisted | 1:1 row model for `sla_breach_events`, built from the above and saved by the repository |
+
+- **`SlaBreachEvent`** (domain model) — fields matching the table columns 1:1
+- **`BreachType`** enum — `FAILED`, `TIMEOUT`, `TIME_EXCEEDED`, `UNKNOWN` (only the first three are reachable from this issue; `UNKNOWN` is a defensive default)
+- **`AlertStatus`** enum — `PENDING`, `SENT`, `FAILED` (matches the CHECK constraint above — no `RETRYING` yet, that's backlog)
+- **`SlaBreachEventRepository`** — `save()` only for this issue (INSERT via `NamedParameterJdbcTemplate` + `RowMapper`); lets `DuplicateKeyException` propagate to the caller rather than swallowing it — the listener decides how to handle a duplicate, not the repository
+- **`AlertHandlerService.handleSlaBreachEvent(SlaBreachedEvent)`** — the listener that turns the Spring event into a persisted `SlaBreachEvent` row
+
 ### Dependencies
 Requires Issue 2 (needs a breach signal to trigger on).
 ```
@@ -171,11 +185,14 @@ Requires Issue 2 (needs a breach signal to trigger on).
 ```markdown
 - [ ] Migration creates `sla_breach_events` with the minimal column set above
 - [ ] `run_id UNIQUE` constraint in place — this is the idempotency guard, required before Issue 5 adds a second (racing) trigger source
-- [ ] `SlaBreachedEvent` published `AFTER_COMMIT` when a completion is newly breached (not on idempotent replay, not on an already-breached run)
-- [ ] `AlertHandlerService` (or equivalent listener) persists exactly one row per `run_id`
-- [ ] A duplicate publish for the same `run_id` is caught (`DuplicateKeyException`), counted via a metric, and does not throw
-- [ ] `breach_type` correctly distinguishes `FAILED` / `TIMEOUT` / timing breach
-- [ ] Integration test: complete a run past its deadline → exactly one `sla_breach_events` row; completing it again (replay) does not add a second row
+- [ ] Domain model `SlaBreachEvent` (`com.company.observability.domain`) with fields matching the table 1:1
+- [ ] `BreachType` enum (`FAILED`, `TIMEOUT`, `TIME_EXCEEDED`, `UNKNOWN`) and `AlertStatus` enum (`PENDING`, `SENT`, `FAILED`)
+- [ ] `SlaBreachEventRepository.save()` — INSERT + `RowMapper`, propagates `DuplicateKeyException` to the caller unhandled
+- [ ] Application event `SlaBreachedEvent` (`com.company.observability.event`) published `AFTER_COMMIT` when a completion is newly breached (not on idempotent replay, not on an already-breached run)
+- [ ] `AlertHandlerService.handleSlaBreachEvent(SlaBreachedEvent)` — `@TransactionalEventListener(phase = AFTER_COMMIT)` + `@Async` + `@Transactional(propagation = REQUIRES_NEW)`, so the listener's write runs in its own transaction, not the completion transaction
+- [ ] `determineBreachType(run)` implemented: `FAILED` status → `BreachType.FAILED`; `TIMEOUT` status → `BreachType.TIMEOUT`; breached timing band (`LATE`/`VERY_LATE`) → `BreachType.TIME_EXCEEDED`
+- [ ] Listener catches `DuplicateKeyException` from `save()`, logs it, increments a `duplicate` counter, and returns without throwing — a second publish for the same `run_id` must not fail the async listener
+- [ ] Integration test: complete a run past its deadline → exactly one `sla_breach_events` row, correct `breach_type`; completing it again (replay) does not add a second row
 ```
 
 **Labels:** `~backend` `~sla` `~database`
@@ -248,6 +265,7 @@ for the completion-triggered path).
 - [ ] `/complete` takes a row lock (`FOR UPDATE`) so its on-write grade is authoritative over any live-set band
 - [ ] Each run's breach write + event publish runs in its own short transaction, isolated from the rest of the polling batch (one bad run can't roll back others)
 - [ ] Reuses the Issue 3/4 persistence + alert pipeline — no separate alert path for live breaches
+- [ ] `determineBreachType` extended with a still-running branch: `endTime == null` → `BreachType.TIME_EXCEEDED` (distinct from the completion-time branches added in Issue 3, which all assume `endTime` is set)
 - [ ] Feature flag: `observability.sla.live-tracking.enabled` (default `true`)
 - [ ] Integration test: run breaches live, then completes early with an on-time actual duration → final band reflects the real outcome, not the live guess
 - [ ] Integration test: run breaches live and stays running for the rest of the test window → breach + alert fire exactly once, not once per poll cycle
