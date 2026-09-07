@@ -40,16 +40,16 @@ public class SlaMonitoringCache {
     private static final String SLA_RUN_INFO_HASH = "obs:sla:run_info";
 
     /**
-     * Live tracking off is a deliberate configuration, but it silently removes the only
+     * Live detection off is a deliberate configuration, but it silently removes the only
      * pre-completion breach signal — so say it once, loudly, at boot. This is the right host for
      * the warning: {@link com.company.observability.scheduled.LiveSlaBreachDetectionJob} cannot
      * announce its own absence (its {@code @ConditionalOnProperty} keeps the bean from existing).
      */
     @PostConstruct
-    void warnIfLiveTrackingDisabled() {
-        if (!slaProperties.isLiveTrackingEnabled()) {
-            log.warn("event=sla.live_tracking.disabled outcome=degraded "
-                    + "reason=observability.sla.live-tracking.enabled=false "
+    void warnIfLiveDetectionDisabled() {
+        if (!slaProperties.isLiveDetectionEnabled()) {
+            log.warn("event=sla.live_detection.disabled outcome=degraded "
+                    + "reason=observability.sla.live-detection.enabled=false "
                     + "impact=hung_runs_do_not_breach_until_completion");
         }
     }
@@ -59,8 +59,8 @@ public class SlaMonitoringCache {
      * Called when run starts
      */
     public void registerForSlaMonitoring(CalculatorRun run) {
-        if (!slaProperties.isLiveTrackingEnabled()) {
-            log.debug("event=sla.monitor.register outcome=rejected reason=tracking_disabled runId={}", run.getRunId());
+        if (!slaProperties.isLiveDetectionEnabled()) {
+            log.debug("event=sla.monitor.register outcome=rejected reason=detection_disabled runId={}", run.getRunId());
             return;
         }
 

@@ -37,7 +37,7 @@ import static org.mockito.Mockito.when;
  *
  * <p>Strategy: Mockito only. Tests verify that the correct Redis commands are
  * issued (or suppressed) based on guard conditions. Guard conditions are
- * exercised by toggling {@link SlaProperties} live-tracking
+ * exercised by toggling {@link SlaProperties} live-detection
  * and by constructing {@link CalculatorRun} objects with specific states.
  */
 @ExtendWith(MockitoExtension.class)
@@ -61,7 +61,7 @@ class SlaMonitoringCacheTest {
     @BeforeEach
     void setUp() {
         slaProperties = new SlaProperties();
-        slaProperties.getLiveTracking().setEnabled(true);
+        slaProperties.getLiveDetection().setEnabled(true);
         cache = new SlaMonitoringCache(
                 redisTemplate, new ObjectMapper(), new SimpleMeterRegistry(), slaProperties);
         lenient().when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
@@ -76,8 +76,8 @@ class SlaMonitoringCacheTest {
     // ---------------------------------------------------------------
 
     @Test
-    void register_whenLiveTrackingDisabled_doesNotWriteToRedis() {
-        slaProperties.getLiveTracking().setEnabled(false);
+    void register_whenLiveDetectionDisabled_doesNotWriteToRedis() {
+        slaProperties.getLiveDetection().setEnabled(false);
         CalculatorRun run = TestFixtures.aRunningRun();
 
         cache.registerForSlaMonitoring(run);

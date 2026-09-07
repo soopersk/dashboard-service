@@ -266,7 +266,7 @@ for the completion-triggered path).
 - [ ] Each run's breach write + event publish runs in its own short transaction, isolated from the rest of the polling batch (one bad run can't roll back others)
 - [ ] Reuses the Issue 3/4 persistence + alert pipeline — no separate alert path for live breaches
 - [ ] `determineBreachType` extended with a still-running branch: `endTime == null` → `BreachType.TIME_EXCEEDED` (distinct from the completion-time branches added in Issue 3, which all assume `endTime` is set)
-- [ ] Feature flag: `observability.sla.live-tracking.enabled` (default `true`)
+- [ ] Feature flag: ~~`observability.sla.live-tracking.enabled` (default `true`)~~ → superseded 2026-09-06 by `observability.sla.live-detection.enabled` (default `false`, opt-in), one flag gating both Redis registration and the scan job
 - [ ] Integration test: run breaches live, then completes early with an on-time actual duration → final band reflects the real outcome, not the live guess
 - [ ] Integration test: run breaches live and stays running for the rest of the test window → breach + alert fire exactly once, not once per poll cycle
 ```

@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest(classes = {RedisCacheConfig.class, SlaMonitoringCache.class, SlaProperties.class})
 @Import(SlaMonitoringCacheIntegrationTest.TestRedisConfig.class)
-@TestPropertySource(properties = "observability.sla.live-tracking.enabled=true")
+@TestPropertySource(properties = "observability.sla.live-detection.enabled=true")
 class SlaMonitoringCacheIntegrationTest extends RedisIntegrationTestBase {
 
     @TestConfiguration

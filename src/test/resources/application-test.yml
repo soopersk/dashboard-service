@@ -1,9 +1,8 @@
 observability:
   sla:
-    live-tracking:
-      enabled: false          # unit tests toggle this explicitly via ReflectionTestUtils
     live-detection:
-      enabled: false          # prevents scheduler beans from loading in slice tests
+      enabled: false          # prevents scheduler beans from loading in slice tests;
+                              # tests needing live detection set it via @TestPropertySource
   security:
     basic:
       username: test

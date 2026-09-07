@@ -17,7 +17,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -42,12 +41,11 @@ import static com.company.observability.util.ObservabilityConstants.*;
 @Component
 @Slf4j
 @RequiredArgsConstructor
-@ConditionalOnProperty(
-        value = {"observability.sla.live-detection.enabled", "observability.sla.live-tracking.enabled"},
-        havingValue = "true",
-        matchIfMissing = true
-)
+@ConditionalOnProperty(value = "observability.sla.live-detection.enabled", havingValue = "true")
 public class LiveSlaBreachDetectionJob {
+
+    /** Look-ahead window for the early-warning scan. */
+    private static final int APPROACHING_WINDOW_MINUTES = 10;
 
     private final SlaMonitoringCache slaMonitoringCache;
     private final CalculatorRunRepository runRepository;
@@ -59,9 +57,6 @@ public class LiveSlaBreachDetectionJob {
     private final AtomicInteger approachingRunsGauge = new AtomicInteger(0);
     private final AtomicInteger lastBreachesGauge = new AtomicInteger(0);
     private final AtomicLong activeRunsGauge = new AtomicLong(0L);
-
-    @Value("${observability.sla.live-detection.interval-ms:15000}")
-    private long detectionIntervalMs;
 
     @PostConstruct
     void registerGauges() {
@@ -265,7 +260,7 @@ public class LiveSlaBreachDetectionJob {
 
         try {
             List<Map<String, Object>> approachingRuns =
-                    slaMonitoringCache.getApproachingSlaRuns(10);
+                    slaMonitoringCache.getApproachingSlaRuns(APPROACHING_WINDOW_MINUTES);
 
             if (!approachingRuns.isEmpty()) {
                 log.info("event=sla.early_warning outcome=success count={}", approachingRuns.size());

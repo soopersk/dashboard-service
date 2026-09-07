@@ -9,11 +9,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Binding tests for {@link SlaProperties}.
  *
- * <p>Focus: {@code observability.sla.live-tracking.enabled}. That key is also referenced as a raw
- * string by {@code LiveSlaBreachDetectionJob}'s {@code @ConditionalOnProperty} (bean conditions are
- * evaluated before property binding, so it cannot read this class), which makes a silent binding
- * break — a renamed nested type, a lost setter — invisible until a hung run fails to breach in
- * production. These tests pin the key and the default.
+ * <p>Focus: {@code observability.sla.live-detection.enabled}. The same key is named as a raw string
+ * by {@code LiveSlaBreachDetectionJob}'s {@code @ConditionalOnProperty} (bean conditions are
+ * evaluated before property binding, so it cannot read this class). These tests pin the key and the
+ * opt-in default so the two halves cannot drift apart silently — a broken binding here surfaces in
+ * production as a hung run that never breaches.
  */
 class SlaPropertiesTest {
 
@@ -24,23 +24,23 @@ class SlaPropertiesTest {
     static class Config {}
 
     @Test
-    void liveTrackingEnabled_defaultsToTrueWhenKeyAbsent() {
-        // Preserves the former @Value("${...:true}") default; base application.yml overrides to false.
+    void liveDetectionEnabled_defaultsToFalseWhenKeyAbsent() {
+        // Opt-in: must match matchIfMissing=false on the job's @ConditionalOnProperty.
         runner.run(context ->
-                assertThat(context.getBean(SlaProperties.class).isLiveTrackingEnabled()).isTrue());
+                assertThat(context.getBean(SlaProperties.class).isLiveDetectionEnabled()).isFalse());
     }
 
     @Test
-    void liveTrackingEnabled_bindsFalseFromProperty() {
-        runner.withPropertyValues("observability.sla.live-tracking.enabled=false")
+    void liveDetectionEnabled_bindsTrueFromProperty() {
+        runner.withPropertyValues("observability.sla.live-detection.enabled=true")
                 .run(context ->
-                        assertThat(context.getBean(SlaProperties.class).isLiveTrackingEnabled()).isFalse());
+                        assertThat(context.getBean(SlaProperties.class).isLiveDetectionEnabled()).isTrue());
     }
 
     @Test
-    void liveTrackingEnabled_bindsTrueFromProperty() {
-        runner.withPropertyValues("observability.sla.live-tracking.enabled=true")
+    void liveDetectionEnabled_bindsFalseFromProperty() {
+        runner.withPropertyValues("observability.sla.live-detection.enabled=false")
                 .run(context ->
-                        assertThat(context.getBean(SlaProperties.class).isLiveTrackingEnabled()).isTrue());
+                        assertThat(context.getBean(SlaProperties.class).isLiveDetectionEnabled()).isFalse());
     }
 }

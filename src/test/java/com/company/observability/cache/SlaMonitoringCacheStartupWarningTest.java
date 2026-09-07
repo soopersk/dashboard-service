@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * Verifies the one-shot startup WARN emitted when live SLA tracking is disabled.
+ * Verifies the one-shot startup WARN emitted when live SLA detection is disabled.
  *
  * <p>Runs through a real (tiny) Spring context rather than calling the method directly: the point
  * of the test is that the {@code @PostConstruct} is actually <em>invoked</em>. A wrong annotation
@@ -34,7 +34,7 @@ import static org.mockito.Mockito.mock;
  */
 class SlaMonitoringCacheStartupWarningTest {
 
-    private static final String WARN_MARKER = "event=sla.live_tracking.disabled";
+    private static final String WARN_MARKER = "event=sla.live_detection.disabled";
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(Config.class)
@@ -64,22 +64,22 @@ class SlaMonitoringCacheStartupWarningTest {
     }
 
     @Test
-    void warnsOnceAtStartup_whenLiveTrackingDisabled() {
-        runner.withPropertyValues("observability.sla.live-tracking.enabled=false")
+    void warnsOnceAtStartup_whenLiveDetectionDisabled() {
+        runner.withPropertyValues("observability.sla.live-detection.enabled=false")
                 .run(context -> {
                     assertThat(context).hasSingleBean(SlaMonitoringCache.class);
 
                     List<ILoggingEvent> warnings = warningsContainingMarker();
                     assertThat(warnings).hasSize(1);
                     assertThat(warnings.get(0).getFormattedMessage())
-                            .contains("observability.sla.live-tracking.enabled=false")
+                            .contains("observability.sla.live-detection.enabled=false")
                             .contains("hung_runs_do_not_breach_until_completion");
                 });
     }
 
     @Test
-    void silentAtStartup_whenLiveTrackingEnabled() {
-        runner.withPropertyValues("observability.sla.live-tracking.enabled=true")
+    void silentAtStartup_whenLiveDetectionEnabled() {
+        runner.withPropertyValues("observability.sla.live-detection.enabled=true")
                 .run(context -> {
                     assertThat(context).hasSingleBean(SlaMonitoringCache.class);
                     assertThat(warningsContainingMarker()).isEmpty();

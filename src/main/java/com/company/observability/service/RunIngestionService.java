@@ -172,7 +172,7 @@ public class RunIngestionService {
                 kv("freq", request.getFrequency()), kv("reportingDate", request.getReportingDate()));
 
         // Register for live SLA monitoring (DAILY and MONTHLY) whenever a deadline was derived.
-        // The live-tracking flag is owned by SlaMonitoringCache, which no-ops when it is off —
+        // The live-detection flag is owned by SlaMonitoringCache, which no-ops when it is off —
         // no caller-side re-read of the property.
         if (slaDeadline != null) {
             slaMonitoringCache.registerForSlaMonitoring(run);

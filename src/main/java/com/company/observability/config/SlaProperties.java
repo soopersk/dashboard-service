@@ -46,17 +46,19 @@ public class SlaProperties {
     private double durationThresholdPercent = 20;
 
     /**
-     * Live SLA monitoring. When disabled, runs are never registered in Redis and
-     * {@code LiveSlaBreachDetectionJob} is not instantiated at all (it is additionally gated by
-     * {@code observability.sla.live-detection.enabled}), so a hung run is graded only at completion.
-     * Defaults to {@code true} to preserve the former {@code @Value} default — base
-     * {@code application.yml} sets it {@code false} deliberately.
+     * Live SLA breach detection — one switch for the whole feature: {@code SlaMonitoringCache}
+     * registers run deadlines in Redis, and {@code LiveSlaBreachDetectionJob} scans them (plus its
+     * DB fallback sweep). Off means a hung run is graded only when it completes.
      *
-     * <p>The raw key is still referenced by {@code LiveSlaBreachDetectionJob}'s
-     * {@code @ConditionalOnProperty}: bean conditions are evaluated before property binding,
-     * so that reference cannot be replaced by this class.
+     * <p>Opt-in: absent means off, matching the {@code @ConditionalOnProperty} on the job. That
+     * condition names this key as a raw string because bean conditions are evaluated before
+     * property binding — the duplication is unavoidable, so keep the two in step.
+     *
+     * <p>Registration and scanning are deliberately <em>not</em> separately configurable: half the
+     * feature is never useful (populating a set nothing reads, or scanning a set nothing fills).
+     * DB-only detection already happens automatically whenever Redis is empty or unavailable.
      */
-    private LiveTracking liveTracking = new LiveTracking();
+    private LiveDetection liveDetection = new LiveDetection();
 
     /** Profile-computation window. Feeds SLA baselines/estimates. */
     private Lookback lookback = new Lookback();
@@ -64,8 +66,8 @@ public class SlaProperties {
     /** When true, the {@code as_of} request parameter is honoured for SLA grading of NOT_STARTED entries. */
     private boolean allowReferenceTime = false;
 
-    public boolean isLiveTrackingEnabled() {
-        return liveTracking.isEnabled();
+    public boolean isLiveDetectionEnabled() {
+        return liveDetection.isEnabled();
     }
 
     public long lateBandMs() {
@@ -85,8 +87,8 @@ public class SlaProperties {
 
     @Getter
     @Setter
-    public static class LiveTracking {
-        private boolean enabled = true;
+    public static class LiveDetection {
+        private boolean enabled = false;
     }
 
     @Getter

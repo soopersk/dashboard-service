@@ -95,9 +95,6 @@ observability:
     # slaTime on the request is self-describing per run (T+N@HH:mm | HH:mm | ISO-8601 duration).
     # No global mode switch — the spec kind decides interpretation.
 
-    live-tracking:
-      enabled: false
-
     # Shared across all slaTime spec kinds: bands grade the actual duration against the
     # frozen slaTime; lookback is the profile-computation window.
     allow-reference-time: false    # enable as_of param for local/dev SLA testing only
@@ -112,7 +109,10 @@ observability:
       daily-days: 30
       monthly-days: 395
 
-    # OPTIMIZED: Live detection every 2 minutes (tolerance: few minutes)
+    # Live SLA breach detection. One switch for the whole feature: `enabled` gates both the
+    # Redis deadline registration (SlaMonitoringCache) and the scan job that reads it
+    # (LiveSlaBreachDetectionJob, incl. its DB sweep and the early-warning scan).
+    # Opt-in — absent means off. Off: breaches are graded only when a run completes.
     live-detection:
       enabled: false
       interval-ms: 120000        # Every 2 minutes (good balance)
@@ -122,11 +122,9 @@ observability:
       db-sweep-interval-ms: 120000
       db-sweep-initial-delay-ms: 60000
 
-    # Early warning for approaching SLA
+    # Early warning for approaching SLA (runs only when live-detection is enabled)
     early-warning:
-      enabled: false
       interval-ms: 180000        # Every 3 minutes
-      threshold-minutes: 10      # Warn if SLA within 10 minutes
 
   # End-of-day aggregation + calculator-profile cache. calculator_sli_daily is populated
   # nightly (not per completion); slowly-changing profiles (avg runtime, avg start/end)
