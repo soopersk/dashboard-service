@@ -45,11 +45,28 @@ public class SlaProperties {
      */
     private double durationThresholdPercent = 20;
 
+    /**
+     * Live SLA monitoring. When disabled, runs are never registered in Redis and
+     * {@code LiveSlaBreachDetectionJob} is not instantiated at all (it is additionally gated by
+     * {@code observability.sla.live-detection.enabled}), so a hung run is graded only at completion.
+     * Defaults to {@code true} to preserve the former {@code @Value} default — base
+     * {@code application.yml} sets it {@code false} deliberately.
+     *
+     * <p>The raw key is still referenced by {@code LiveSlaBreachDetectionJob}'s
+     * {@code @ConditionalOnProperty}: bean conditions are evaluated before property binding,
+     * so that reference cannot be replaced by this class.
+     */
+    private LiveTracking liveTracking = new LiveTracking();
+
     /** Profile-computation window. Feeds SLA baselines/estimates. */
     private Lookback lookback = new Lookback();
 
     /** When true, the {@code as_of} request parameter is honoured for SLA grading of NOT_STARTED entries. */
     private boolean allowReferenceTime = false;
+
+    public boolean isLiveTrackingEnabled() {
+        return liveTracking.isEnabled();
+    }
 
     public long lateBandMs() {
         return lateBandMinutes * 60_000L;
@@ -64,6 +81,12 @@ public class SlaProperties {
         return frequency == Frequency.MONTHLY
                 ? lookback.getMonthlyDays()
                 : lookback.getDailyDays();
+    }
+
+    @Getter
+    @Setter
+    public static class LiveTracking {
+        private boolean enabled = true;
     }
 
     @Getter

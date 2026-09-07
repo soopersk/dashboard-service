@@ -23,7 +23,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -53,9 +52,6 @@ public class RunIngestionService {
     private final LifecycleLogger lifecycleLogger;
     private final SlaProperties slaProperties;
     private final CalculatorNameResolver calculatorNameResolver;
-
-    @Value("${observability.sla.live-tracking.enabled:true}")
-    private boolean liveTrackingEnabled;
 
     /** Result of {@link #startRun}: the persisted (or pre-existing) run and whether this call created it. */
     public record StartRunOutcome(CalculatorRun run, boolean created) {}
@@ -176,7 +172,9 @@ public class RunIngestionService {
                 kv("freq", request.getFrequency()), kv("reportingDate", request.getReportingDate()));
 
         // Register for live SLA monitoring (DAILY and MONTHLY) whenever a deadline was derived.
-        if (liveTrackingEnabled && slaDeadline != null) {
+        // The live-tracking flag is owned by SlaMonitoringCache, which no-ops when it is off —
+        // no caller-side re-read of the property.
+        if (slaDeadline != null) {
             slaMonitoringCache.registerForSlaMonitoring(run);
         }
 
@@ -186,8 +184,8 @@ public class RunIngestionService {
                 "frequency", run.getFrequency().name()
         ).increment();
 
-        log.info("event=run.start.persist outcome=success slaSpec={} slaDeadline={} liveTracking={}",
-                request.getSlaTime(), slaDeadline, liveTrackingEnabled);
+        log.info("event=run.start.persist outcome=success slaSpec={} slaDeadline={}",
+                request.getSlaTime(), slaDeadline);
 
         return new StartRunOutcome(run, true);
     }

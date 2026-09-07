@@ -1,6 +1,7 @@
 package com.company.observability.cache;
 
 import com.company.observability.config.RedisCacheConfig;
+import com.company.observability.config.SlaProperties;
 import com.company.observability.domain.CalculatorRun;
 import com.company.observability.util.TestFixtures;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -18,7 +19,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.test.context.TestPropertySource;
 
 import java.time.Instant;
 import java.util.List;
@@ -32,8 +33,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>Verifies the complete lifecycle: register → query breached/approaching → deregister.
  * Each test begins with {@code FLUSHALL} for isolation.
  */
-@SpringBootTest(classes = {RedisCacheConfig.class, SlaMonitoringCache.class})
+@SpringBootTest(classes = {RedisCacheConfig.class, SlaMonitoringCache.class, SlaProperties.class})
 @Import(SlaMonitoringCacheIntegrationTest.TestRedisConfig.class)
+@TestPropertySource(properties = "observability.sla.live-tracking.enabled=true")
 class SlaMonitoringCacheIntegrationTest extends RedisIntegrationTestBase {
 
     @TestConfiguration
@@ -74,7 +76,6 @@ class SlaMonitoringCacheIntegrationTest extends RedisIntegrationTestBase {
     @BeforeEach
     void setUp() {
         redisTemplate.getConnectionFactory().getConnection().serverCommands().flushAll();
-        ReflectionTestUtils.setField(cache, "liveTrackingEnabled", true);
     }
 
     // ---------------------------------------------------------------

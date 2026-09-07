@@ -1,5 +1,6 @@
 package com.company.observability.cache;
 
+import com.company.observability.config.SlaProperties;
 import com.company.observability.domain.CalculatorRun;
 import com.company.observability.domain.enums.RunStatus;
 import com.company.observability.util.TestFixtures;
@@ -13,7 +14,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDate;
 import java.util.LinkedHashSet;
@@ -37,8 +37,8 @@ import static org.mockito.Mockito.when;
  *
  * <p>Strategy: Mockito only. Tests verify that the correct Redis commands are
  * issued (or suppressed) based on guard conditions. Guard conditions are
- * exercised via {@code ReflectionTestUtils.setField} for the {@code liveTrackingEnabled}
- * flag and by constructing {@link CalculatorRun} objects with specific states.
+ * exercised by toggling {@link SlaProperties} live-tracking
+ * and by constructing {@link CalculatorRun} objects with specific states.
  */
 @ExtendWith(MockitoExtension.class)
 class SlaMonitoringCacheTest {
@@ -56,11 +56,14 @@ class SlaMonitoringCacheTest {
     private HashOperations<String, String, String> hashOps;
 
     private SlaMonitoringCache cache;
+    private SlaProperties slaProperties;
 
     @BeforeEach
     void setUp() {
-        cache = new SlaMonitoringCache(redisTemplate, new ObjectMapper(), new SimpleMeterRegistry());
-        ReflectionTestUtils.setField(cache, "liveTrackingEnabled", true);
+        slaProperties = new SlaProperties();
+        slaProperties.getLiveTracking().setEnabled(true);
+        cache = new SlaMonitoringCache(
+                redisTemplate, new ObjectMapper(), new SimpleMeterRegistry(), slaProperties);
         lenient().when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         // doReturn bypasses the compile-time generic mismatch:
         // StringRedisTemplate.opsForHash() declares HashOperations<String,Object,Object>
@@ -74,7 +77,7 @@ class SlaMonitoringCacheTest {
 
     @Test
     void register_whenLiveTrackingDisabled_doesNotWriteToRedis() {
-        ReflectionTestUtils.setField(cache, "liveTrackingEnabled", false);
+        slaProperties.getLiveTracking().setEnabled(false);
         CalculatorRun run = TestFixtures.aRunningRun();
 
         cache.registerForSlaMonitoring(run);

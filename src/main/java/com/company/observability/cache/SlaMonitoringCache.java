@@ -1,13 +1,14 @@
 package com.company.observability.cache;
 
+import com.company.observability.config.SlaProperties;
 import com.company.observability.domain.CalculatorRun;
 import com.company.observability.domain.enums.RunStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -30,9 +31,7 @@ public class SlaMonitoringCache {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
     private final MeterRegistry meterRegistry;
-
-    @Value("${observability.sla.live-tracking.enabled:true}")
-    private boolean liveTrackingEnabled;
+    private final SlaProperties slaProperties;
 
     // Sorted set: score = SLA deadline timestamp (epoch millis)
     private static final String SLA_DEADLINES_ZSET = "obs:sla:deadlines";
@@ -41,11 +40,26 @@ public class SlaMonitoringCache {
     private static final String SLA_RUN_INFO_HASH = "obs:sla:run_info";
 
     /**
+     * Live tracking off is a deliberate configuration, but it silently removes the only
+     * pre-completion breach signal — so say it once, loudly, at boot. This is the right host for
+     * the warning: {@link com.company.observability.scheduled.LiveSlaBreachDetectionJob} cannot
+     * announce its own absence (its {@code @ConditionalOnProperty} keeps the bean from existing).
+     */
+    @PostConstruct
+    void warnIfLiveTrackingDisabled() {
+        if (!slaProperties.isLiveTrackingEnabled()) {
+            log.warn("event=sla.live_tracking.disabled outcome=degraded "
+                    + "reason=observability.sla.live-tracking.enabled=false "
+                    + "impact=hung_runs_do_not_breach_until_completion");
+        }
+    }
+
+    /**
      * Register a calculator run for SLA monitoring
      * Called when run starts
      */
     public void registerForSlaMonitoring(CalculatorRun run) {
-        if (!liveTrackingEnabled) {
+        if (!slaProperties.isLiveTrackingEnabled()) {
             log.debug("event=sla.monitor.register outcome=rejected reason=tracking_disabled runId={}", run.getRunId());
             return;
         }

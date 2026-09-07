@@ -24,7 +24,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -118,8 +117,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_derivedDeadline_freezesSlaTimeAndRegistersForMonitoring() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", true);
-
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
         Instant derivedDeadline = start.plusSeconds(3600);
@@ -152,8 +149,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_monthlyWithDerivedDeadline_registersForMonitoring() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", true);
-
         LocalDate eom = LocalDate.of(2026, 2, 28);
         Instant start = Instant.parse("2026-02-28T05:00:00Z");
         Instant derivedDeadline = start.plusSeconds(7200);
@@ -184,8 +179,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_noBaseline_skipsMonitoringAndDoesNotBreach() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", true);
-
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
 
@@ -218,8 +211,6 @@ class RunIngestionServiceTest {
     void startRun_resolvedBaselineUsedAsExpectedDurationWhenRequestAndProfileEmpty() {
         // expectedDuration chain: request → profile avg → resolved baseline → null.
         // With no request value and an empty profile, the resolved baseline is the fallback.
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", true);
-
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
         Instant derivedDeadline = start.plusSeconds(4_200);
@@ -249,8 +240,6 @@ class RunIngestionServiceTest {
     @Test
     void startRun_persistsRequestExpectedDurationMs() {
         // expectedDurationMs from the request always wins over the resolved baseline.
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", true);
-
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
         Instant clockDeadline = Instant.parse("2026-02-20T22:00:00Z");
@@ -282,8 +271,6 @@ class RunIngestionServiceTest {
     void startRun_clockMode_estimatedEndIsNullWhenNoDuration() {
         // With no duration baseline and an empty profile, estimatedEndTime is persisted null —
         // the frozen clock deadline is carried only by slaTime (consumers fall back to it).
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", true);
-
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
         Instant clockDeadline = Instant.parse("2026-02-20T22:00:00Z");
@@ -312,8 +299,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_estimatedEnd_usesResolvedBaselineWhenOnlySlaTimeProvided() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", true);
-
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
 
@@ -522,7 +507,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_estimatedTimes_requestValuesWinOverProfile() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", true);
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
         Instant reqEstStart = Instant.parse("2026-02-20T04:30:00Z");
@@ -554,7 +538,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_estimatedTimes_derivedFromProfileWhenRequestOmits() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", true);
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
 
@@ -676,7 +659,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_scopedProfiles_runNumberForBaseline_dimensionForEstimates() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
 
@@ -715,7 +697,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_noneCalc_strayRegion_collapsedToAllAndPreservedInAttributes() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
 
@@ -747,7 +728,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_regionCalc_regionLeftUntouched() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
 
@@ -773,7 +753,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_runTypeCalc_strayRegionNoRunType_collapsedAndMissingCounter() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
 
@@ -807,7 +786,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_runTypeCalc_regionAndRunType_regionStashedRunTypeKept_noMissingCounter() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
 
@@ -837,7 +815,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_regionCalc_strayRunType_stashedRegionKept() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
 
@@ -871,7 +848,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_agnosticCalc_strayRunNumber_nulledAndPreservedInAttributes() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
 
@@ -902,7 +878,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_awareCalc_strayRunNumberPreserved() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
 
@@ -932,7 +907,6 @@ class RunIngestionServiceTest {
 
     @Test
     void startRun_numericRunNumber_normalized() {
-        ReflectionTestUtils.setField(service, "liveTrackingEnabled", false);
         LocalDate reportingDate = LocalDate.of(2026, 2, 20);
         Instant start = Instant.parse("2026-02-20T05:00:00Z");
 
