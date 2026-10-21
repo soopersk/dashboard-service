@@ -6,10 +6,11 @@ This guide is the external-team contract for the two **consumer-facing query end
 |----------|---------|------|
 | [`GET /api/v1/calculators/batch/runs`](#1-get-apiv1calculatorsbatchruns) | Point-in-time **dimensional run state** for a set of calculators on one reporting date | Dashboard grid |
 | [`GET /api/v1/analytics/calculators/{name}/executions`](#2-get-apiv1analyticscalculatorsnameexecutions) | **Raw execution history** for one calculator over a lookback window | Run-history / performance chart |
+| [`GET /api/v1/calculators/{name}/runs`](#3-get-apiv1calculatorsnameruns) | **Last-N runs** of one calculator, optionally by reporting date, frequency or on-demand `odRunId` | On-demand run tracking, generic lookups |
 
 Both endpoints:
 
-- Require `Authorization: Basic <base64>` and `X-Tenant-Id` headers. All data is tenant-scoped.
+- Require `Authorization: Basic <base64>`. `X-Tenant-Id` is accepted but optional and does **not** filter results.
 - Identify calculators by their **readable `calculator_name`** (unique per tenant), never the internal UUID `calculator_id`.
 - Are Redis-cached and safe for high-frequency polling.
 - Return all timestamps as **UTC ISO-8601 `Instant`s** (`2026-05-19T13:02:00Z`).
@@ -361,7 +362,61 @@ curl -u admin:admin -H "X-Tenant-Id: tenant1" \
 
 ---
 
-## Choosing between the two
+## 3. `GET /api/v1/calculators/{name}/runs`
+
+Generic newest-first run history for one calculator. Built for the on-demand run feature (look up a run by the `odRunId` Airflow injects into `additional_attributes`), but usable for any "last N runs" need.
+
+### Request
+
+| Param | Required | Default | Notes |
+|-------|----------|---------|-------|
+| `{name}` (path) | yes | — | `calculator_name` (not the UUID) |
+| `reportingDate` | no | — | ISO date `yyyy-MM-dd`. Exact match |
+| `frequency` | no | both | `DAILY`/`D` or `MONTHLY`/`M`. Unknown value → `400` |
+| `odRunId` | no | — | Matches `additional_attributes.odRunId` exactly |
+| `limit` | no | `20` | `1–100` |
+| `nocache` | no | `false` | Bypass Redis read (cache is refreshed) |
+
+Filters combine with AND. Order: `reportingDate` DESC, then insertion time DESC. `limit=1` = the latest run. Future-dated runs, if any, sort first (there is no implicit date bound).
+
+Every request returns **at most `limit` runs**, including `odRunId` and date-filtered requests. There is no pagination or total count.
+
+```
+/api/v1/calculators/capitalcalc/runs?reportingDate=2026-10-20&frequency=DAILY&limit=1   # latest run for a date
+/api/v1/calculators/capitalcalc/runs?odRunId=od-123                                     # on-demand run(s)
+/api/v1/calculators/capitalcalc/runs?limit=20                                           # last 20 runs, any frequency
+/api/v1/calculators/capitalcalc/runs?reportingDate=2026-09-30&frequency=MONTHLY         # all runs of a month-end
+```
+
+### Response `200 OK`
+
+```json
+{
+  "calculatorName": "capitalcalc",
+  "runs": [
+    {
+      "runId": "run-123", "calculatorId": "uuid-...", "frequency": "DAILY",
+      "reportingDate": "2026-10-20", "runNumber": "1", "region": null, "runType": null,
+      "status": "SUCCESS", "startTime": "2026-10-21T05:00:00Z", "endTime": "2026-10-21T05:42:00Z",
+      "durationMs": 2520000, "expectedDurationMs": 2400000, "slaTime": "2026-10-21T07:00:00Z",
+      "slaBand": "ON_TIME", "slaBreached": false,
+      "odRunId": "od-123", "consRunVersion": "3", "calculatorRunVersion": "7"
+    }
+  ]
+}
+```
+
+- `odRunId` / `consRunVersion` / `calculatorRunVersion` are read from the run's `additional_attributes`. Each is an explicit `null` when absent (e.g. scheduled runs). Values are strings (a numeric value arrives as `"3"`). No other attribute is exposed.
+- No match → `200` with `runs: []`.
+- Every physical run is its own entry (no split/rerun collapsing).
+
+### Caching
+
+Redis-cached per filter combination, evicted on every run start/complete/breach of the calculator; TTL backstop 30 s while any run is `RUNNING` (or none found), 5 min otherwise. HTTP `Cache-Control: private, max-age=5` in the same live case, `30` otherwise.
+
+---
+
+## Choosing an endpoint
 
 | Need | Use |
 |------|-----|
@@ -370,6 +425,7 @@ curl -u admin:admin -H "X-Tenant-Id: tenant1" \
 | "Show every physical run over the last N days" | `/executions` |
 | "Compare each run's actual vs expected duration over time" | `/executions` |
 | "Grouped/logical run-performance view (splits collapsed)" | `/run-performance` |
+| "Latest run / last N runs of one calculator, or the run(s) for an on-demand `odRunId`" | `/calculators/{name}/runs` |
 
 ---
 
@@ -377,7 +433,7 @@ curl -u admin:admin -H "X-Tenant-Id: tenant1" \
 
 | HTTP Status | Cause |
 |-------------|-------|
-| `400 Bad Request` | Missing/invalid `reporting_date`, blank `keys`, `days` out of `1–365`, malformed parameter |
+| `400 Bad Request` | Missing/invalid `reporting_date`/`reportingDate`, blank `keys`, unknown `frequency`, `days` out of `1–365`, `limit` out of `1–100`, any parameter that can't be converted to its type (e.g. `limit=abc`, `nocache=abc`) |
 | `401 Unauthorized` | Missing or invalid `Authorization` header |
 | `403 Forbidden` | `X-Tenant-Id` does not match the authenticated tenant |
 | `500 Internal Server Error` | Unhandled server-side error |

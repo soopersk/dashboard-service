@@ -3,9 +3,11 @@ package com.company.observability.controller;
 import com.company.observability.domain.enums.Dimension;
 import com.company.observability.domain.enums.Frequency;
 import com.company.observability.dto.response.CalculatorBatchRunsResponse;
+import com.company.observability.dto.response.RunHistoryResponse;
 import com.company.observability.service.ExpectedRunsService;
 import com.company.observability.service.CalculatorNameResolver;
 import com.company.observability.service.CalculatorStateService;
+import com.company.observability.service.RunQueryService;
 import com.company.observability.util.ObservabilityConstants;
 import com.company.observability.util.RunNumbers;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -40,6 +42,7 @@ public class RunQueryController {
     private final CalculatorStateService calculatorStateService;
     private final CalculatorNameResolver nameResolver;
     private final ExpectedRunsService expectedRunsService;
+    private final RunQueryService runQueryService;
     private final MeterRegistry meterRegistry;
 
     @GetMapping("/batch/runs")
@@ -116,6 +119,47 @@ public class RunQueryController {
         } finally {
             sample.stop(meterRegistry.timer(ObservabilityConstants.API_ANALYTICS_DURATION,
                     "endpoint", "/calculators/batch/runs"));
+        }
+    }
+
+    @GetMapping("/{calculatorName}/runs")
+    @Operation(
+            summary = "Run history for one calculator",
+            description = "Returns the calculator's runs newest first (reporting_date, then created_at). " +
+                    "The path variable is calculator_name; upstream UUIDs are not accepted. " +
+                    "All filters are optional and combined with AND: reportingDate, frequency (omit for both), " +
+                    "odRunId (matches additional_attributes.odRunId set by on-demand Airflow triggers). " +
+                    "Each entry carries additionalAttributes verbatim (odRunId, consRunVersion, calculatorRunVersion, ...)."
+    )
+    public ResponseEntity<RunHistoryResponse> getRunHistory(
+            @PathVariable String calculatorName,
+            @RequestHeader(value = "X-Tenant-Id", required = false) String tenantId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate reportingDate,
+            @Parameter(description = "DAILY or MONTHLY. Omit to include both.")
+            @RequestParam(required = false) String frequency,
+            @Parameter(description = "On-demand run id (additional_attributes.odRunId)")
+            @RequestParam(required = false) String odRunId,
+            @Parameter(description = "Max runs returned (1-100)")
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit,
+            @Parameter(description = "Skip cache and fetch directly from DB (refreshes cache on return)")
+            @RequestParam(value = "nocache", defaultValue = "false") boolean nocache) {
+
+        Frequency freq = frequency == null ? null : Frequency.fromStrict(frequency);
+        String od = (odRunId == null || odRunId.isBlank()) ? null : odRunId.trim();
+
+        log.info("event=run_history.request outcome=accepted calculatorName={} reportingDate={} frequency={} odRunId={} limit={}",
+                calculatorName, reportingDate, freq, od, limit);
+
+        Timer.Sample sample = Timer.start(meterRegistry);
+        try {
+            RunHistoryResponse response = runQueryService.getRunHistory(calculatorName, freq, reportingDate, od, limit, nocache);
+            int maxAgeSeconds = response.anyLive() ? 5 : 30;
+            return ResponseEntity.ok()
+                    .cacheControl(CacheControl.maxAge(maxAgeSeconds, TimeUnit.SECONDS).cachePrivate())
+                    .body(response);
+        } finally {
+            sample.stop(meterRegistry.timer(ObservabilityConstants.API_ANALYTICS_DURATION,
+                    "endpoint", "/calculators/{name}/runs"));
         }
     }
 

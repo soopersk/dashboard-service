@@ -19,6 +19,7 @@ import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -101,6 +102,20 @@ public class GlobalExceptionHandler {
         meterRegistry.counter(API_ERROR, "exception", ex.getClass().getSimpleName(), "status", String.valueOf(status.value())).increment();
         log.warn("event=api.error status={} exception={} message={}", status.value(), ex.getClass().getSimpleName(), ex.getMessage());
         return buildErrorResponse(status, ex.getMessage());
+    }
+
+    /**
+     * A query/path value that can't be converted (e.g. {@code reportingDate=not-a-date}, {@code limit=abc})
+     * is a client error, not a 500. The message names the parameter and target type but never echoes the
+     * rejected value (caller input).
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<Map<String, Object>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        HttpStatus status = HttpStatus.BAD_REQUEST;
+        String expected = ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "valid value";
+        meterRegistry.counter(API_ERROR, "exception", ex.getClass().getSimpleName(), "status", String.valueOf(status.value())).increment();
+        log.warn("event=api.error status={} exception={} param={}", status.value(), ex.getClass().getSimpleName(), ex.getName());
+        return buildErrorResponse(status, "Invalid value for parameter '" + ex.getName() + "': expected " + expected);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

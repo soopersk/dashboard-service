@@ -253,6 +253,86 @@ class CalculatorRunRepositoryJdbcTest extends PostgresJdbcIntegrationTestBase {
         assertThat(run.get().getSlaBand()).isNull();
     }
 
+    // ---------------------------------------------------------------
+    // findRunHistory — newest-first, optional AND-combined filters
+    // ---------------------------------------------------------------
+
+    @Test
+    void findRunHistory_noFilters_returnsNewestFirstAcrossDatesAndFrequencies_limited() {
+        LocalDate today = LocalDate.now();
+        Instant base = Instant.parse("2026-02-22T10:00:00Z");
+        insertHistoryRun("run-yday", "calc-a", "DAILY", today.minusDays(1), base.plusSeconds(900), null);
+        insertHistoryRun("run-t1", "calc-a", "DAILY", today, base.plusSeconds(100), null);
+        insertHistoryRun("run-t2", "calc-a", "MONTHLY", today, base.plusSeconds(200), null);
+        insertHistoryRun("run-other", "calc-b", "DAILY", today, base.plusSeconds(300), null);
+
+        assertThat(repository.findRunHistory("calc-a", null, null, null, 2))
+                .extracting(CalculatorRun::getRunId)
+                .containsExactly("run-t2", "run-t1");
+        assertThat(repository.findRunHistory("calc-a", null, null, null, 20))
+                .extracting(CalculatorRun::getRunId)
+                .containsExactly("run-t2", "run-t1", "run-yday");
+    }
+
+    @Test
+    void findRunHistory_reportingDateAndFrequency_filterCombined() {
+        LocalDate today = LocalDate.now();
+        Instant base = Instant.parse("2026-02-22T10:00:00Z");
+        insertHistoryRun("run-yday", "calc-a", "DAILY", today.minusDays(1), base, null);
+        insertHistoryRun("run-daily", "calc-a", "DAILY", today, base.plusSeconds(100), null);
+        insertHistoryRun("run-monthly", "calc-a", "MONTHLY", today, base.plusSeconds(200), null);
+
+        assertThat(repository.findRunHistory("calc-a", Frequency.DAILY, today, null, 20))
+                .extracting(CalculatorRun::getRunId)
+                .containsExactly("run-daily");
+        assertThat(repository.findRunHistory("calc-a", Frequency.MONTHLY, null, null, 20))
+                .extracting(CalculatorRun::getRunId)
+                .containsExactly("run-monthly");
+    }
+
+    @Test
+    void findRunHistory_odRunId_matchesAdditionalAttributesAndLoadsJsonb() {
+        LocalDate today = LocalDate.now();
+        Instant base = Instant.parse("2026-02-22T10:00:00Z");
+        insertHistoryRun("run-od1", "calc-a", "DAILY", today, base,
+                "{\"odRunId\":\"od-1\",\"consRunVersion\":\"3\",\"calculatorRunVersion\":\"7\"}");
+        insertHistoryRun("run-od2", "calc-a", "DAILY", today, base.plusSeconds(100), "{\"odRunId\":\"od-2\"}");
+        insertHistoryRun("run-sched", "calc-a", "DAILY", today, base.plusSeconds(200), null);
+        Mockito.when(jsonbConverter.fromJsonb(Mockito.any())).thenReturn(java.util.Map.of("k", "v"));
+
+        List<CalculatorRun> result = repository.findRunHistory("calc-a", null, null, "od-1", 20);
+
+        assertThat(result).extracting(CalculatorRun::getRunId).containsExactly("run-od1");
+        // JSONB columns are mapped (not the JSONB-less SELECT_BASE path)
+        assertThat(result.get(0).getAdditionalAttributes()).containsEntry("k", "v");
+    }
+
+    @Test
+    void findRunHistory_includesFutureDatedRun_sortedFirst() {
+        LocalDate today = LocalDate.now();
+        Instant base = Instant.parse("2026-02-22T10:00:00Z");
+        insertHistoryRun("run-today", "calc-a", "DAILY", today, base.plusSeconds(500), null);
+        insertHistoryRun("run-future", "calc-a", "MONTHLY", today.plusDays(10), base, null);
+
+        // no implicit date bound: a future reporting date is returned and sorts ahead of today
+        assertThat(repository.findRunHistory("calc-a", null, null, null, 20))
+                .extracting(CalculatorRun::getRunId)
+                .containsExactly("run-future", "run-today");
+    }
+
+    private void insertHistoryRun(String runId, String calculatorName, String frequency, LocalDate reportingDate,
+                                  Instant createdAt, String additionalAttributesJson) {
+        jdbcTemplate.update("""
+            INSERT INTO calculator_runs (
+                run_id, calculator_id, calculator_name, tenant_id, frequency, reporting_date,
+                start_time, status, additional_attributes, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?)
+            """,
+                runId, "id-" + calculatorName, calculatorName, "tenant-1", frequency, reportingDate,
+                Timestamp.from(createdAt), "SUCCESS", additionalAttributesJson,
+                Timestamp.from(createdAt), Timestamp.from(createdAt));
+    }
+
     private void insertRunWithRunNumber(String runId, String calculatorName, LocalDate reportingDate,
                                         Instant createdAt, String runNumber) {
         jdbcTemplate.update("""

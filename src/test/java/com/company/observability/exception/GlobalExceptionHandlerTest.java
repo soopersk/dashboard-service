@@ -57,6 +57,21 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void handleTypeMismatch_returns400_namesParamAndType_withoutEchoingValue() {
+        var ex = new org.springframework.web.method.annotation.MethodArgumentTypeMismatchException(
+                "<script>bad</script>", java.time.LocalDate.class, "reportingDate",
+                mock(org.springframework.core.MethodParameter.class), null);
+
+        ResponseEntity<Map<String, Object>> response = handler.handleTypeMismatch(ex);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals(400, response.getBody().get("status"));
+        String message = (String) response.getBody().get("message");
+        assertEquals("Invalid value for parameter 'reportingDate': expected LocalDate", message);
+        assertTrue(!message.contains("bad"));
+    }
+
+    @Test
     void handleConstraintViolation_returns400() {
         ResponseEntity<Map<String, Object>> response =
                 handler.handleConstraintViolation(new ConstraintViolationException("constraint failed", null));

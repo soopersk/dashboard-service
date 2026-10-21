@@ -7,6 +7,8 @@ import com.company.observability.dto.response.CalculatorBatchRunsResponse;
 import com.company.observability.service.ExpectedRunsService;
 import com.company.observability.service.CalculatorNameResolver;
 import com.company.observability.service.CalculatorStateService;
+import com.company.observability.service.RunQueryService;
+import com.company.observability.dto.response.RunHistoryResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -26,6 +28,7 @@ import java.util.Map;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -50,6 +53,9 @@ class RunQueryControllerTest {
 
     @MockitoBean
     private ExpectedRunsService expectedRunsService;
+
+    @MockitoBean
+    private RunQueryService runQueryService;
 
     @BeforeEach
     void configurePassthroughResolver() {
@@ -558,5 +564,83 @@ class RunQueryControllerTest {
                         .header(TENANT_HEADER, "t1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.calculators.capital.runs[0].runNumber").value("2"));
+    }
+
+    // ---------------------------------------------------------------
+    // GET /{calculatorName}/runs — run history
+    // ---------------------------------------------------------------
+
+    @Test
+    void runHistory_bindsAllFilters_andDelegatesToService() throws Exception {
+        when(runQueryService.getRunHistory(any(), any(), any(), any(), anyInt(), anyBoolean()))
+                .thenReturn(new RunHistoryResponse("capitalcalc", List.of(historyEntry("SUCCESS"))));
+
+        mockMvc.perform(get("/api/v1/calculators/capitalcalc/runs")
+                        .header(TENANT_HEADER, "t1")
+                        .param("reportingDate", "2026-09-30")
+                        .param("frequency", "M")
+                        .param("odRunId", " od-1 ")
+                        .param("limit", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.calculatorName").value("capitalcalc"))
+                .andExpect(jsonPath("$.runs[0].odRunId").value("od-1"))
+                .andExpect(jsonPath("$.runs[0].consRunVersion").value("3"))
+                .andExpect(jsonPath("$.runs[0].calculatorRunVersion").value("7"))
+                .andExpect(jsonPath("$.runs[0].additionalAttributes").doesNotExist())
+                .andExpect(jsonPath("$.anyLive").doesNotExist())
+                .andExpect(header().string("Cache-Control", "max-age=30, private"));
+
+        verify(runQueryService).getRunHistory("capitalcalc", Frequency.MONTHLY, LocalDate.of(2026, 9, 30),
+                "od-1", 1, false);
+    }
+
+    @Test
+    void runHistory_defaults_noFrequencyNoDateLimit20() throws Exception {
+        when(runQueryService.getRunHistory(any(), any(), any(), any(), anyInt(), anyBoolean()))
+                .thenReturn(new RunHistoryResponse("capitalcalc", List.of(historyEntry("RUNNING"))));
+
+        mockMvc.perform(get("/api/v1/calculators/capitalcalc/runs").param("odRunId", ""))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "max-age=5, private"));
+
+        verify(runQueryService).getRunHistory("capitalcalc", null, null, null, 20, false);
+    }
+
+    @Test
+    void runHistory_invalidParams_return400() throws Exception {
+        mockMvc.perform(get("/api/v1/calculators/capitalcalc/runs").param("frequency", "WEEKLY"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/v1/calculators/capitalcalc/runs").param("limit", "0"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/v1/calculators/capitalcalc/runs").param("limit", "101"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(runQueryService);
+    }
+
+    @Test
+    void runHistory_typeMismatchParams_return400_not500() throws Exception {
+        mockMvc.perform(get("/api/v1/calculators/capitalcalc/runs").param("reportingDate", "not-a-date"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Invalid value for parameter 'reportingDate': expected LocalDate"));
+        mockMvc.perform(get("/api/v1/calculators/capitalcalc/runs").param("limit", "abc"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/v1/calculators/capitalcalc/runs").param("nocache", "abc"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(runQueryService);
+    }
+
+    @Test
+    void batchRuns_malformedReportingDate_returns400_not500() throws Exception {
+        mockMvc.perform(get("/api/v1/calculators/batch/runs")
+                        .param("reporting_date", "not-a-date")
+                        .param("keys", "capitalcalc"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(calculatorStateService);
+    }
+
+    private static RunHistoryResponse.RunEntry historyEntry(String status) {
+        return new RunHistoryResponse.RunEntry("r1", "id-1", "MONTHLY", LocalDate.of(2026, 9, 30), null, null, null,
+                status, Instant.parse("2026-10-01T05:00:00Z"), null, null, null, null, null, false,
+                "od-1", "3", "7");
     }
 }

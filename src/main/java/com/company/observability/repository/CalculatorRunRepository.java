@@ -499,6 +499,43 @@ public class CalculatorRunRepository {
     }
 
     /**
+     * Newest-first run history for one calculator. Every filter except {@code calculatorName} is
+     * optional (null = no filter). Loads {@code additional_attributes} (on-demand metadata lives there).
+     *
+     * <p>With {@code reportingDate} the scan prunes to one partition. Without it, the scan relies on
+     * {@code calculator_runs_history_idx} (ordered partition scan, LIMIT stops early) or
+     * {@code calculator_runs_od_run_id_idx} for {@code odRunId}.
+     */
+    public List<CalculatorRun> findRunHistory(String calculatorName, Frequency frequency,
+                                              LocalDate reportingDate, String odRunId, int limit) {
+        StringBuilder sql = new StringBuilder(SELECT_WITH_JSONB + "WHERE calculator_name = :calculatorName\n");
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("calculatorName", calculatorName)
+                .addValue("limit", limit);
+        if (frequency != null) {
+            sql.append("  AND frequency = :frequency\n");
+            params.addValue("frequency", frequency.name());
+        }
+        if (reportingDate != null) {
+            sql.append("  AND reporting_date = :reportingDate\n");
+            params.addValue("reportingDate", reportingDate);
+        }
+        if (odRunId != null) {
+            sql.append("  AND (additional_attributes ->> 'odRunId') = :odRunId\n");
+            params.addValue("odRunId", odRunId);
+        }
+        sql.append("ORDER BY reporting_date DESC, created_at DESC\nLIMIT :limit");
+
+        Timer.Sample sample = Timer.start(meterRegistry);
+        List<CalculatorRun> results = jdbcTemplate.query(sql.toString(), params, new CalculatorRunRowMapper(true));
+        sample.stop(Timer.builder(DB_QUERY_DURATION).tag("query", "find_run_history").register(meterRegistry));
+
+        log.debug("event=db.query outcome=complete query=find_run_history calculatorName={} frequency={} reportingDate={} odRunId={} rows={}",
+                calculatorName, frequency, reportingDate, odRunId, results.size());
+        return results;
+    }
+
+    /**
      * Get partition statistics for monitoring
      */
     public List<Map<String, Object>> getPartitionStatistics() {
