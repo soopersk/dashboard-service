@@ -64,6 +64,12 @@ public final class ObservabilityConstants {
     public static final String CACHE_STATE_MISS = "obs.cache.state.miss";
     public static final String CACHE_STATE_EVICTION         = "obs.cache.state.eviction";
     public static final String CACHE_STATE_EVICTION_FAILURE = "obs.cache.state.eviction.failure";
+    /** Run-history cache lookups; tag outcome = hit | miss | corrupt | error | bypass. */
+    public static final String CACHE_HISTORY_LOOKUP = "obs.cache.history.lookup";
+    /** Run-history snapshot writes; tag outcome = success | error. */
+    public static final String CACHE_HISTORY_WRITE = "obs.cache.history.write";
+    /** Run-history generation invalidations; tag outcome = success | error. */
+    public static final String CACHE_HISTORY_INVALIDATION = "obs.cache.history.invalidation";
 
     // ================================================================
     // DB layer (repositories)

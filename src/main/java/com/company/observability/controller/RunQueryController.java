@@ -129,7 +129,8 @@ public class RunQueryController {
                     "The path variable is calculator_name; upstream UUIDs are not accepted. " +
                     "All filters are optional and combined with AND: reportingDate, frequency (omit for both), " +
                     "odRunId (matches additional_attributes.odRunId set by on-demand Airflow triggers). " +
-                    "Each entry carries additionalAttributes verbatim (odRunId, consRunVersion, calculatorRunVersion, ...)."
+                    "Each entry exposes odRunId, consRunVersion and calculatorRunVersion (null when absent). " +
+                    "nocache=true bypasses the server cache read and refreshes it."
     )
     public ResponseEntity<RunHistoryResponse> getRunHistory(
             @PathVariable String calculatorName,

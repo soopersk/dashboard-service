@@ -1,12 +1,13 @@
 package com.company.observability.service;
 
-import com.company.observability.cache.AnalyticsCacheService;
+import com.company.observability.cache.CalculatorRunHistoryCacheService;
 import com.company.observability.domain.CalculatorRun;
 import com.company.observability.domain.enums.Frequency;
 import com.company.observability.domain.enums.RunStatus;
 import com.company.observability.domain.enums.SlaBand;
 import com.company.observability.dto.response.RunHistoryResponse;
 import com.company.observability.repository.CalculatorRunRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -17,9 +18,12 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -32,22 +36,20 @@ class RunQueryServiceTest {
     private CalculatorRunRepository runRepository;
 
     @Mock
-    private AnalyticsCacheService cacheService;
+    private CalculatorRunHistoryCacheService historyCache;
 
     @InjectMocks
     private RunQueryService service;
 
-    @Test
-    void cacheHit_returnsCachedWithoutDbRead() {
-        RunHistoryResponse cached = new RunHistoryResponse("calc-a", List.of());
-        when(cacheService.getRunHistory("calc-a", Frequency.DAILY, DATE, null, 1)).thenReturn(cached);
-
-        assertThat(service.getRunHistory("calc-a", Frequency.DAILY, DATE, null, 1, false)).isSameAs(cached);
-        verifyNoInteractions(runRepository);
+    /** Cache behaviour is covered by CalculatorRunHistoryCacheServiceTest; here the loader always runs. */
+    @BeforeEach
+    void passThroughCache() {
+        lenient().when(historyCache.getOrLoad(any(), any(), any(), any(), anyInt(), anyBoolean(), any()))
+                .thenAnswer(inv -> inv.<Supplier<RunHistoryResponse>>getArgument(6).get());
     }
 
     @Test
-    void cacheMiss_readsDb_mapsOnDemandFields_cachesWithSettledTtl() {
+    void mapsOnDemandFields_andExposesNoOtherAttribute() {
         when(runRepository.findRunHistory("calc-a", null, null, "od-1", 20))
                 .thenReturn(List.of(run("r1", RunStatus.SUCCESS,
                         Map.of("odRunId", "od-1", "consRunVersion", 3, "calculatorRunVersion", "7",
@@ -64,7 +66,6 @@ class RunQueryServiceTest {
         assertThat(entry.consRunVersion()).isEqualTo("3");        // numeric → string
         assertThat(entry.calculatorRunVersion()).isEqualTo("7");
         assertThat(entry.region()).isNull();                        // stray attribute not exposed
-        verify(cacheService).putRunHistory("calc-a", null, null, "od-1", 20, response, RunQueryService.SETTLED_TTL);
     }
 
     @Test
@@ -80,26 +81,13 @@ class RunQueryServiceTest {
     }
 
     @Test
-    void runningOrEmptyResult_cachedWithLiveTtl() {
-        when(runRepository.findRunHistory(any(), any(), any(), any(), anyInt()))
-                .thenReturn(List.of(run("r1", RunStatus.RUNNING, null)))
-                .thenReturn(List.of());
+    void passesFiltersAndNocacheThrough() {
+        when(runRepository.findRunHistory("calc-a", Frequency.MONTHLY, DATE, "od-1", 5)).thenReturn(List.of());
 
-        RunHistoryResponse running = service.getRunHistory("calc-a", null, null, null, 20, false);
-        RunHistoryResponse empty = service.getRunHistory("calc-a", null, null, "od-x", 20, false);
+        service.getRunHistory("calc-a", Frequency.MONTHLY, DATE, "od-1", 5, true);
 
-        verify(cacheService).putRunHistory("calc-a", null, null, null, 20, running, RunQueryService.LIVE_TTL);
-        verify(cacheService).putRunHistory("calc-a", null, null, "od-x", 20, empty, RunQueryService.LIVE_TTL);
-    }
-
-    @Test
-    void nocache_skipsCacheReadButRefreshesCache() {
-        when(runRepository.findRunHistory("calc-a", null, null, null, 20)).thenReturn(List.of());
-
-        service.getRunHistory("calc-a", null, null, null, 20, true);
-
-        verify(cacheService, never()).getRunHistory(any(), any(), any(), any(), anyInt());
-        verify(cacheService).putRunHistory(eq("calc-a"), eq(null), eq(null), eq(null), eq(20), any(), any());
+        verify(historyCache).getOrLoad(eq("calc-a"), eq(Frequency.MONTHLY), eq(DATE), eq("od-1"), eq(5), eq(true), any());
+        verify(runRepository).findRunHistory("calc-a", Frequency.MONTHLY, DATE, "od-1", 5);
     }
 
     private static CalculatorRun run(String runId, RunStatus status, Map<String, Object> attrs) {

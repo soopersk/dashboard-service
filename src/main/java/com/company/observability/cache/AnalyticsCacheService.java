@@ -1,8 +1,6 @@
 package com.company.observability.cache;
 
 import com.company.observability.domain.CalculatorRun;
-import com.company.observability.domain.enums.Frequency;
-import com.company.observability.dto.response.RunHistoryResponse;
 import com.company.observability.event.RunCompletedEvent;
 import com.company.observability.event.RunStartedEvent;
 import com.company.observability.event.SlaBreachedEvent;
@@ -17,8 +15,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.List;
@@ -39,7 +35,6 @@ public class AnalyticsCacheService {
 
     private static final String ANALYTICS_PREFIX = "obs:analytics:";
     private static final String ANALYTICS_INDEX_PREFIX = "obs:analytics:index:";
-    private static final String RUN_HISTORY_PREFIX = "history";
     private static final Duration DEFAULT_TTL = Duration.ofMinutes(5);
     private static final Duration INDEX_TTL = Duration.ofHours(1);
 
@@ -66,22 +61,6 @@ public class AnalyticsCacheService {
                            LocalDate asOfDate, Object response) {
         write(calculatorKey, buildKeyWithRunNumber(keyPrefix, calculatorKey, frequency, days, runNumber, asOfDate),
                 response, DEFAULT_TTL);
-    }
-
-    /**
-     * Run history cache for {@code /calculators/{name}/runs}.
-     * Key: obs:analytics:history:{urlEncodedName}:{freq|all}:{reportingDate|all}:{limit}:{od:none|od:value:{odRunId}}
-     */
-    public RunHistoryResponse getRunHistory(String calculatorName, Frequency frequency,
-                                            LocalDate reportingDate, String odRunId, int limit) {
-        return read(buildRunHistoryKey(calculatorName, frequency, reportingDate, odRunId, limit),
-                RUN_HISTORY_PREFIX, RunHistoryResponse.class);
-    }
-
-    public void putRunHistory(String calculatorName, Frequency frequency, LocalDate reportingDate,
-                              String odRunId, int limit, RunHistoryResponse response, Duration ttl) {
-        write(calculatorName, buildRunHistoryKey(calculatorName, frequency, reportingDate, odRunId, limit),
-                response, ttl);
     }
 
     private <T> T read(String key, String keyPrefix, Class<T> responseType) {
@@ -117,7 +96,7 @@ public class AnalyticsCacheService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async
     public void onRunStarted(RunStartedEvent event) {
-        // A new run changes both executions and run-history results — evict every analytics key.
+        // A new run changes executions results — evict every analytics key.
         evictForCalculator(event.getRun());
     }
 
@@ -134,7 +113,7 @@ public class AnalyticsCacheService {
     }
 
     private void evictForCalculator(CalculatorRun run) {
-        // Analytics caches (executions, run history) are all tracked in the calculatorName index.
+        // Analytics caches (executions) are tracked in the calculatorName index.
         evictIndex(buildIndexKey(run.getCalculatorName()), run.getCalculatorName());
         // Also evict the alias cache entry when this real calculator belongs to a UI alias
         nameResolver.findAliasFor(run.getCalculatorName())
@@ -170,20 +149,6 @@ public class AnalyticsCacheService {
         String rn = (runNumber == null) ? "all" : runNumber;
         return ANALYTICS_PREFIX + prefix + ":" + calculatorKey
                 + ":" + frequency + ":" + days + ":" + rn + ":" + asOfDate;
-    }
-
-    /**
-     * One key per filter combination, never shared between combinations. The free-form calculator
-     * name is URL-encoded so it cannot impersonate later segments; the free-form odRunId is tagged
-     * ({@code od:none} vs {@code od:value:{id}}) so no value can collide with "absent", and it is last.
-     */
-    static String buildRunHistoryKey(String calculatorName, Frequency frequency,
-                                     LocalDate reportingDate, String odRunId, int limit) {
-        return ANALYTICS_PREFIX + RUN_HISTORY_PREFIX + ":" + URLEncoder.encode(calculatorName, StandardCharsets.UTF_8)
-                + ":" + (frequency == null ? "all" : frequency.name())
-                + ":" + (reportingDate == null ? "all" : reportingDate)
-                + ":" + limit
-                + ":" + (odRunId == null ? "od:none" : "od:value:" + odRunId);
     }
 
     private String buildIndexKey(String calculatorId) {

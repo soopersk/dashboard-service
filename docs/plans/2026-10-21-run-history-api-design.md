@@ -239,6 +239,8 @@ Every value is bound as a parameter, so there is no SQL injection surface. `Name
 
 ## 6. Redis cache design
 
+> **Superseded by [2026-10-21-run-history-cache-plan.md](2026-10-21-run-history-cache-plan.md)** (generation-invalidated `CalculatorRunHistoryCacheService`, implemented 2026-10-21). This section describes the replaced index-set design and is kept for history; its §6.5 stale-write race is the reason for the replacement.
+
 ### 6.1 Pattern
 
 **Cache-aside, Redis-first, event-invalidated, TTL as backstop.** This is the same pattern `/executions` uses, and it lives in the same service (`AnalyticsCacheService`).
@@ -559,3 +561,5 @@ private static String attr(Map<String, Object> attrs, String key) {
 | 2026-10-21 | Performance verification asserted plan node types (incl. "no Seq Scan") on unrealistic data, and "typically 1–2 partitions" ignored empty future partitions and planning cost | P2 | §5.2 corrected; Task 8 measures realistic datasets, worst cases, planning/execution time, buffers, and provisional latency targets |
 | 2026-10-21 | Re-evaluation: implicit date bounds can hide valid runs; free-form calculator names can impersonate cache-key segments | P2 | Removed speculative date-bound fallback (D6); encode names using the JDK and test collisions (§6.2, Task 4). Also clarified result limits and best-effort cache freshness. |
 | 2026-10-21 | Consistency pass: future-dated ordering undocumented/untested; consumer doc contradicts tenancy; status, §7 snippet and adjacent-issue note incomplete; §6.5 race wording ambiguous | — | §3 ordering note + Task 3 test; Task 9 tenancy correction; status, §7, §6.2 and §6.5 updated |
+
+**2026-10-21: cache redesign.** The index-set history cache (§6) let a request that read before a commit write its snapshot after eviction, hiding a new run for up to the 5 min TTL. It was replaced by the generation-invalidated cache in [2026-10-21-run-history-cache-plan.md](2026-10-21-run-history-cache-plan.md). The API contract, SQL, V12 indexes and HTTP `Cache-Control` are unchanged. Decision D9 (reuse `AnalyticsCacheService` for history) is superseded.
